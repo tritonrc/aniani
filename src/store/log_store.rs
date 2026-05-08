@@ -103,8 +103,14 @@ impl LogStore {
             }
         };
 
+        let Some(stream) = self.streams.get_mut(&stream_id) else {
+            tracing::warn!(
+                stream_id,
+                "stream identity index referenced missing stream; skipping log ingest"
+            );
+            return;
+        };
         let entry_count = entries.len();
-        let stream = self.streams.get_mut(&stream_id).expect("stream must exist");
 
         let was_empty = stream.entries.is_empty();
         for entry in entries {

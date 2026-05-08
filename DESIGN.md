@@ -102,7 +102,7 @@ The name "Obsidian" is a placeholder — dark, glassy, reflects everything clear
 | `parking_lot` | Fast RwLock for concurrent store access |
 | `clap` | CLI argument parsing |
 | `tracing` | Internal logging (the irony is not lost) |
-| `snap` | Snappy decompression for Loki protobuf push |
+| `snap` | Snappy decompression for Loki JSON push and Prometheus remote write |
 | `flate2` | Gzip support for OTLP |
 | `regex` | Regex label matchers in LogQL/PromQL |
 
@@ -137,7 +137,9 @@ All three API surfaces share a single port. Routes are disambiguated by path pre
 
 **Endpoint:** `POST /loki/api/v1/push`
 
-Accepts the Loki push format (JSON or Protobuf+Snappy).
+Accepts Loki push JSON, either plain or snappy-compressed. Native Loki
+protobuf push is intentionally not implemented; clients should send JSON to
+this endpoint or use OTLP logs via `POST /v1/logs`.
 
 ```json
 {
@@ -713,7 +715,7 @@ Using `promql-parser`, `opentelemetry-proto`, and `lasso` compresses the timelin
 - CLI parsing with `clap`
 - Storage engine structs (`LogStore`, `MetricStore`, `TraceStore`) with `parking_lot::RwLock` and `lasso::Rodeo` interning
 - Inverted index with sorted posting lists and merge intersection
-- Loki push API ingestion (JSON first, protobuf+snappy later)
+- Loki push API ingestion (plain JSON and snappy-compressed JSON)
 - OTLP metrics ingestion using `opentelemetry-proto` types (gauge + counter)
 - OTLP traces ingestion using `opentelemetry-proto` types
 - Eviction background task
@@ -752,7 +754,7 @@ Using `promql-parser`, `opentelemetry-proto`, and `lasso` compresses the timelin
 - `bincode` serialization of all stores (snapshot)
 - SIGUSR1 handler for on-demand snapshot + `--restore` flag
 - Timer-based auto-snapshot
-- Loki protobuf+snappy ingestion path
+- Clear error response for native Loki protobuf push attempts
 - End-to-end integration test: service → Obsidian → query
 - Worktree boot script
 

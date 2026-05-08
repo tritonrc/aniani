@@ -31,17 +31,14 @@ pub struct SearchParams {
 
 /// Convert a timestamp parameter to nanoseconds.
 ///
-/// Heuristic: values below 1e15 are treated as epoch seconds, values at
-/// or above 1e15 are treated as nanoseconds. This threshold corresponds
-/// to roughly the year 33,658,145 in seconds but only year 2001 in nanos,
-/// so real-world timestamps will always sort into the correct bucket.
+/// Accept epoch seconds, milliseconds, or nanoseconds using magnitude ranges.
 fn param_to_ns(val: u64) -> i64 {
-    if val >= 1_000_000_000_000_000 {
-        // Already nanoseconds
-        val as i64
-    } else {
-        // Seconds — convert
+    if val < 100_000_000_000 {
         (val as i64).saturating_mul(1_000_000_000)
+    } else if val < 100_000_000_000_000 {
+        (val as i64).saturating_mul(1_000_000)
+    } else {
+        val as i64
     }
 }
 

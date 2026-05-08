@@ -176,8 +176,14 @@ impl MetricStore {
             }
         };
 
+        let Some(series) = self.series.get_mut(&series_id) else {
+            tracing::warn!(
+                series_id,
+                "series identity index referenced missing series; skipping metric ingest"
+            );
+            return;
+        };
         let sample_count = samples.len();
-        let series = self.series.get_mut(&series_id).expect("series must exist");
 
         let was_empty = series.samples.is_empty();
         for sample in samples {
@@ -221,6 +227,14 @@ impl MetricStore {
             }
             None => &[],
         }
+    }
+
+    /// Return the newest sample timestamp across all metric series.
+    pub fn latest_sample_timestamp_ms(&self) -> Option<i64> {
+        self.series
+            .values()
+            .filter_map(|series| series.samples.last().map(|sample| sample.timestamp_ms))
+            .max()
     }
 
     /// Get labels for a series as resolved strings.

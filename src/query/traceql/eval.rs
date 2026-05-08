@@ -348,21 +348,22 @@ fn span_matches_condition(
             op,
             value,
         } => {
-            // Build the full attribute key to look up
             let attr_key = match scope {
                 AttrScope::Resource => format!("resource.{}", name),
                 AttrScope::Span => format!("span.{}", name),
             };
+            let fallback_key = match scope {
+                AttrScope::Resource => Some(name.as_str()),
+                AttrScope::Span => None,
+            };
 
-            // Find the attribute
             for (key_spur, attr_val) in &span.attributes {
                 let key = store.resolve(key_spur);
-                if key == attr_key {
+                if key == attr_key || fallback_key.is_some_and(|fallback| key == fallback) {
                     return compare_attribute_value(attr_val, op, value, compiled_regex, store);
                 }
             }
 
-            // Attribute not found
             matches!(op, CompareOp::Neq)
         }
     }

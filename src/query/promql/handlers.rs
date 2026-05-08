@@ -58,6 +58,7 @@ pub async fn query_post(
 
 async fn query_inner(state: SharedState, params: InstantQueryParams) -> (StatusCode, Json<Value>) {
     let now_ms = now_ms();
+    let store = state.metric_store.read();
     let time_ms = match params.time.as_deref() {
         Some(t) => match parse_timestamp_ms(t) {
             Some(ms) => ms,
@@ -70,10 +71,9 @@ async fn query_inner(state: SharedState, params: InstantQueryParams) -> (StatusC
                 );
             }
         },
-        None => now_ms,
+        None => store.latest_sample_timestamp_ms().unwrap_or(now_ms),
     };
 
-    let store = state.metric_store.read();
     match evaluate_instant(&params.query, &store, time_ms) {
         Ok(result) => (StatusCode::OK, Json(format_promql_result(result, time_ms))),
         Err(e) => (
