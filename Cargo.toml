@@ -1,14 +1,14 @@
 [package]
-name = "obsidian"
+name = "aniani"
 version = "0.7.1"
 edition = "2024"
 
 [lib]
-name = "obsidian"
+name = "aniani"
 path = "src/lib.rs"
 
 [[bin]]
-name = "obsidian"
+name = "aniani"
 path = "src/main.rs"
 
 [dependencies]

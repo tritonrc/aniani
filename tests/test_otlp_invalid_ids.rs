@@ -58,7 +58,7 @@ fn make_trace_request_raw_ids(trace_id: Vec<u8>, span_id: Vec<u8>) -> ExportTrac
 #[tokio::test]
 async fn test_invalid_trace_id_skipped() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     // Send a span with an invalid trace_id (only 8 bytes instead of 16)
     let req =
@@ -82,7 +82,7 @@ async fn test_invalid_trace_id_skipped() {
 #[tokio::test]
 async fn test_invalid_span_id_skipped() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     // Valid trace_id but invalid span_id (only 4 bytes instead of 8)
     let req = make_trace_request_raw_ids(
@@ -106,7 +106,7 @@ async fn test_invalid_span_id_skipped() {
 #[tokio::test]
 async fn test_all_zero_trace_id_skipped() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let req = make_trace_request_raw_ids(
         vec![0u8; 16], // all-zero trace_id (valid length but invalid per OTLP spec)
@@ -128,7 +128,7 @@ async fn test_all_zero_trace_id_skipped() {
 #[tokio::test]
 async fn test_valid_and_invalid_spans_mixed() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     // First: ingest a valid span
     let valid_req = make_trace_request_raw_ids(

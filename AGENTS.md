@@ -1,8 +1,8 @@
-# AGENTS.md — Obsidian Development Guidelines
+# AGENTS.md — Aniani Development Guidelines
 
 ## Project Overview
 
-Obsidian is a lightweight, ephemeral observability engine: a single Rust binary exposing LogQL, PromQL, and TraceQL query surfaces over in-memory stores. It receives telemetry via Loki push API, OTLP/HTTP, and Prometheus remote write — services send directly to Obsidian. It is designed to be booted per git worktree for agent-driven development workflows.
+Aniani is a lightweight, ephemeral observability engine: a single Rust binary exposing LogQL, PromQL, and TraceQL query surfaces over in-memory stores. It receives telemetry via Loki push API, OTLP/HTTP, and Prometheus remote write — services send directly to Aniani. It is designed to be booted per git worktree for agent-driven development workflows.
 
 Read `DESIGN.md` for the full technical specification before making changes.
 

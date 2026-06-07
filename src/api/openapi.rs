@@ -3,7 +3,7 @@
 use axum::Json;
 use serde_json::{Map, Value, json};
 
-/// GET /api/v1/openapi.json — returns the OpenAPI 3.0.3 specification for all Obsidian endpoints.
+/// GET /api/v1/openapi.json — returns the OpenAPI 3.0.3 specification for all Aniani endpoints.
 pub async fn openapi_spec() -> Json<Value> {
     Json(spec())
 }
@@ -514,7 +514,7 @@ fn spec() -> Value {
     doc.insert(
         "info".into(),
         json!({
-            "title": "Obsidian",
+            "title": "Aniani",
             "description": "Lightweight ephemeral observability engine exposing LogQL, PromQL, and TraceQL query surfaces over in-memory stores.",
             "version": "0.7.1"
         }),

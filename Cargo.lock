@@ -45,6 +45,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "aniani"
+version = "0.7.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bincode",
+ "bytes",
+ "clap",
+ "flate2",
+ "http",
+ "http-body-util",
+ "lasso",
+ "nom",
+ "opentelemetry-proto",
+ "parking_lot",
+ "promql-parser",
+ "prost",
+ "regex",
+ "reqwest",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "snap",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
+]
+
+[[package]]
 name = "anstream"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1133,41 +1168,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c7398b9c8b70908f6371f47ed36737907c87c52af34c268fed0bf0ceb92ead9"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "obsidian"
-version = "0.7.1"
-dependencies = [
- "anyhow",
- "axum",
- "bincode",
- "bytes",
- "clap",
- "flate2",
- "http",
- "http-body-util",
- "lasso",
- "nom",
- "opentelemetry-proto",
- "parking_lot",
- "promql-parser",
- "prost",
- "regex",
- "reqwest",
- "rustc-hash",
- "serde",
- "serde_json",
- "smallvec",
- "snap",
- "tempfile",
- "thiserror",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "urlencoding",
 ]
 
 [[package]]

@@ -26,7 +26,7 @@ async fn json_response(app: &axum::Router, req: Request<Body>) -> (StatusCode, s
 #[tokio::test]
 async fn test_summary_endpoint_returns_cross_signal_errors() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let now_ns = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -86,7 +86,7 @@ async fn test_summary_endpoint_returns_cross_signal_errors() {
 
 #[tokio::test]
 async fn test_summary_endpoint_requires_service_parameter() {
-    let app = obsidian::server::build_router(make_state());
+    let app = aniani::server::build_router(make_state());
     let req = Request::builder()
         .method("GET")
         .uri("/api/v1/summary")
@@ -100,7 +100,7 @@ async fn test_summary_endpoint_requires_service_parameter() {
 #[tokio::test]
 async fn test_traceql_limit_is_respected_when_query_present() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let now_ns = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -134,7 +134,7 @@ async fn test_traceql_limit_is_respected_when_query_present() {
 
 #[tokio::test]
 async fn test_otlp_metric_name_collision_is_rejected() {
-    let app = obsidian::server::build_router(make_state());
+    let app = aniani::server::build_router(make_state());
 
     let now_ns = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -170,7 +170,7 @@ async fn test_otlp_metric_name_collision_is_rejected() {
 
 #[tokio::test]
 async fn test_promql_instant_metric_name_regex_uses_latest_sample_when_time_omitted() {
-    let app = obsidian::server::build_router(make_state());
+    let app = aniani::server::build_router(make_state());
     let old_ts_ns = 1_700_000_000_000_000_000u64;
 
     let metric_req = make_gauge_request("payments", "queue_depth", 7.0, old_ts_ns);
@@ -200,7 +200,7 @@ async fn test_promql_instant_metric_name_regex_uses_latest_sample_when_time_omit
 
 #[tokio::test]
 async fn test_trace_search_accepts_millisecond_time_bounds() {
-    let app = obsidian::server::build_router(make_state());
+    let app = aniani::server::build_router(make_state());
     let start_ns = 1_700_000_000_000_000_000u64;
     let end_ns = start_ns + 100_000_000;
 
@@ -233,7 +233,7 @@ async fn test_trace_search_accepts_millisecond_time_bounds() {
 
 #[tokio::test]
 async fn test_traceql_matches_resource_service_namespace() {
-    let app = obsidian::server::build_router(make_state());
+    let app = aniani::server::build_router(make_state());
     let trace_req = ExportTraceServiceRequest {
         resource_spans: vec![ResourceSpans {
             resource: Some(Resource {

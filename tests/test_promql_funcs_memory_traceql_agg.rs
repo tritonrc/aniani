@@ -127,7 +127,7 @@ fn make_summary_request(service_name: &str, ts_ns: u64) -> ExportMetricsServiceR
 #[tokio::test]
 async fn test_promql_offset_modifier_looks_back_one_hour() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     // Early window: 60s, 120s
     ingest_metrics(
@@ -190,7 +190,7 @@ async fn test_promql_offset_modifier_looks_back_one_hour() {
 #[tokio::test]
 async fn test_promql_label_replace_creates_new_label() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     ingest_metrics(&app, "payments", "http_requests_total", 42.0, 5_000_000_000).await;
 
@@ -211,7 +211,7 @@ async fn test_promql_label_replace_creates_new_label() {
 #[tokio::test]
 async fn test_promql_label_join_combines_labels() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     ingest_metrics(&app, "payments", "http_requests_total", 42.0, 5_000_000_000).await;
 
@@ -235,7 +235,7 @@ async fn test_promql_label_join_combines_labels() {
 #[tokio::test]
 async fn test_status_memory_bytes_changes_as_more_data_is_ingested() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     // Seed some initial data across all three stores.
     push_logs(&app, "payments", "first log line", "1000000000").await;
@@ -301,7 +301,7 @@ async fn test_status_memory_bytes_changes_as_more_data_is_ingested() {
 #[tokio::test]
 async fn test_traceql_count_aggregate_filters_traces_by_error_span_count() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     // Trace A: 6 error spans (status_code 2 = Error in OTLP)
     let matching_trace_id: [u8; 16] = [0xaa; 16];
@@ -369,7 +369,7 @@ async fn test_traceql_count_aggregate_filters_traces_by_error_span_count() {
 #[tokio::test]
 async fn test_otlp_metrics_support_summary() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let payload = make_summary_request("payments", 10_000_000_000);
     // The metrics handler returns 200 with a JSON body containing accepted counts.

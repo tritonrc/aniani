@@ -44,7 +44,7 @@ fn make_resource(service_name: &str) -> Option<Resource> {
 #[tokio::test]
 async fn test_bug1_otlp_logs_json_with_charset() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let logs_request = ExportLogsServiceRequest {
         resource_logs: vec![ResourceLogs {
@@ -95,7 +95,7 @@ async fn test_bug1_otlp_logs_json_with_charset() {
 #[tokio::test]
 async fn test_bug1_otlp_logs_json_plain() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let logs_request = ExportLogsServiceRequest {
         resource_logs: vec![ResourceLogs {
@@ -143,7 +143,7 @@ async fn test_bug1_otlp_logs_json_plain() {
 #[tokio::test]
 async fn test_bug2_otlp_metrics_json_with_charset() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let metrics_request = ExportMetricsServiceRequest {
         resource_metrics: vec![ResourceMetrics {
@@ -204,7 +204,7 @@ async fn test_bug2_otlp_metrics_json_with_charset() {
 #[tokio::test]
 async fn test_bug3_protobuf_content_type_routes_to_protobuf_decoder() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let trace_request = ExportTraceServiceRequest {
         resource_spans: vec![ResourceSpans {
@@ -258,7 +258,7 @@ async fn test_bug3_protobuf_content_type_routes_to_protobuf_decoder() {
 #[tokio::test]
 async fn test_bug3_missing_content_type_routes_to_protobuf_decoder() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let trace_request = ExportTraceServiceRequest {
         resource_spans: vec![ResourceSpans {
@@ -313,7 +313,7 @@ async fn test_bug3_missing_content_type_routes_to_protobuf_decoder() {
 #[tokio::test]
 async fn test_bug4_search_without_query_returns_recent_traces() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let trace_id1: [u8; 16] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
     let span_id1: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
@@ -383,7 +383,7 @@ async fn test_bug4_search_without_query_returns_recent_traces() {
 #[tokio::test]
 async fn test_bug4_search_with_empty_query_returns_recent_traces() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let trace_id: [u8; 16] = [3, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
     let span_id: [u8; 8] = [3, 2, 3, 4, 5, 6, 7, 8];
@@ -425,7 +425,7 @@ async fn test_bug4_search_with_empty_query_returns_recent_traces() {
 #[tokio::test]
 async fn test_bug5_search_time_range_filter_seconds() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let old_trace: [u8; 16] = [10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
     let old_span: [u8; 8] = [10, 0, 0, 0, 0, 0, 0, 1];
@@ -482,7 +482,7 @@ async fn test_bug5_search_time_range_filter_seconds() {
 #[tokio::test]
 async fn test_bug5_search_time_range_filter_nanoseconds() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let old_trace: [u8; 16] = [11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
     let old_span: [u8; 8] = [11, 0, 0, 0, 0, 0, 0, 1];
@@ -541,7 +541,7 @@ async fn test_bug5_search_time_range_filter_nanoseconds() {
 #[tokio::test]
 async fn test_bug5_search_time_range_with_query() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let trace1: [u8; 16] = [12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
     let span1: [u8; 8] = [12, 0, 0, 0, 0, 0, 0, 1];
@@ -599,7 +599,7 @@ async fn test_bug5_search_time_range_with_query() {
 #[tokio::test]
 async fn test_bug6_ready_endpoint_exists() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let req = Request::builder()
         .method("GET")
@@ -618,7 +618,7 @@ async fn test_bug6_ready_endpoint_exists() {
 #[tokio::test]
 async fn test_bug6_openapi_includes_ready() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let req = Request::builder()
         .method("GET")
@@ -646,7 +646,7 @@ async fn test_bug6_openapi_includes_ready() {
 #[tokio::test]
 async fn test_bug6_openapi_search_q_is_optional() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let req = Request::builder()
         .method("GET")

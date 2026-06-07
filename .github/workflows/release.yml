@@ -17,10 +17,10 @@ jobs:
         include:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            artifact: obsidian-linux-x86_64
+            artifact: aniani-linux-x86_64
           - os: macos-14
             target: aarch64-apple-darwin
-            artifact: obsidian-macos-arm64
+            artifact: aniani-macos-arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -46,7 +46,7 @@ jobs:
       - name: Package
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../${{ matrix.artifact }}.tar.gz obsidian
+          tar czf ../../../${{ matrix.artifact }}.tar.gz aniani
           cd ../../..
           shasum -a 256 ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
 
@@ -78,7 +78,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create ${{ github.ref_name }} \
-            --title "Obsidian ${{ github.ref_name }}" \
+            --title "Aniani ${{ github.ref_name }}" \
             --generate-notes \
             artifacts/*.tar.gz \
             artifacts/*.sha256

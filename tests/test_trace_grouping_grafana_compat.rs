@@ -43,7 +43,7 @@ async fn json_get(app: &axum::Router, uri: &str) -> (StatusCode, Value) {
 #[tokio::test]
 async fn test_get_trace_multi_service_spans() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let trace_id: [u8; 16] = [
         0xAA, 0xBB, 0xCC, 0xDD, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0xAA,
@@ -158,7 +158,7 @@ async fn test_get_trace_multi_service_spans() {
 #[tokio::test]
 async fn test_get_trace_not_found() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let (status, json) = json_get(&app, "/api/traces/00000000000000000000000000000000").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -169,7 +169,7 @@ async fn test_get_trace_not_found() {
 #[tokio::test]
 async fn test_get_trace_invalid_id() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let (status, json) = json_get(&app, "/api/traces/not-a-valid-hex").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -180,7 +180,7 @@ async fn test_get_trace_invalid_id() {
 #[tokio::test]
 async fn test_get_trace_span_fields() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let trace_id: [u8; 16] = [0x01; 16];
     let span_id: [u8; 8] = [0x02; 8];
@@ -228,7 +228,7 @@ async fn test_get_trace_span_fields() {
 #[tokio::test]
 async fn test_ready_endpoint() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let (status, json) = json_get(&app, "/ready").await;
     assert_eq!(status, StatusCode::OK);
@@ -239,7 +239,7 @@ async fn test_ready_endpoint() {
 #[tokio::test]
 async fn test_status_endpoint() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let (status, json) = json_get(&app, "/api/v1/status").await;
     assert_eq!(status, StatusCode::OK);
@@ -262,7 +262,7 @@ async fn test_status_endpoint() {
 #[tokio::test]
 async fn test_promql_scalar_arithmetic() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     // "1+1" URL-encoded is "1%2B1".
     let (status, json) = json_get(&app, "/api/v1/query?query=1%2B1").await;
@@ -287,7 +287,7 @@ async fn test_promql_scalar_arithmetic() {
 #[tokio::test]
 async fn test_promql_number_literal() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let (status, json) = json_get(&app, "/api/v1/query?query=42").await;
     assert_eq!(status, StatusCode::OK);
@@ -302,7 +302,7 @@ async fn test_promql_number_literal() {
 #[tokio::test]
 async fn test_promql_labels_empty_store() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let (status, json) = json_get(&app, "/api/v1/labels").await;
     assert_eq!(status, StatusCode::OK);
@@ -314,7 +314,7 @@ async fn test_promql_labels_empty_store() {
 #[tokio::test]
 async fn test_services_empty_store() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let (status, json) = json_get(&app, "/api/v1/services").await;
     assert_eq!(status, StatusCode::OK);

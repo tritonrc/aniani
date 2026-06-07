@@ -31,7 +31,7 @@ async fn json_response(resp: axum::http::Response<Body>) -> Value {
 #[tokio::test]
 async fn test_logql_line_filter_on_json_log_lines() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     // Ingest JSON-shaped log lines with different levels
     let ts_base = 1_700_000_000_000_000_000u64;
@@ -102,7 +102,7 @@ async fn test_logql_line_filter_on_json_log_lines() {
 #[tokio::test]
 async fn test_logql_line_not_contains_filter() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let ts_base = 1_700_000_000_000_000_000u64;
 
@@ -159,7 +159,7 @@ async fn test_logql_line_not_contains_filter() {
 #[tokio::test]
 async fn test_logql_regex_filter_on_json_log_lines() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let ts_base = 1_700_000_000_000_000_000u64;
 
@@ -220,7 +220,7 @@ async fn test_logql_regex_filter_on_json_log_lines() {
 #[tokio::test]
 async fn test_loki_push_snappy_compressed_json() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let ts = "1700000000000000000";
     let push_body = serde_json::json!({
@@ -282,7 +282,7 @@ async fn test_loki_push_snappy_compressed_json() {
 #[tokio::test]
 async fn test_loki_push_snappy_content_type_x_snappy() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let push_body = serde_json::json!({
         "streams": [{
@@ -314,7 +314,7 @@ async fn test_loki_push_snappy_content_type_x_snappy() {
 #[tokio::test]
 async fn test_loki_push_invalid_snappy_returns_bad_request() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     // Send garbage bytes with snappy content-type
     let req = Request::builder()
@@ -343,7 +343,7 @@ async fn test_loki_push_invalid_snappy_returns_bad_request() {
 #[tokio::test]
 async fn test_logql_parse_error_response() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     // Send a malformed LogQL query
     let query = urlencoding::encode(r#"not a valid query"#);
@@ -370,7 +370,7 @@ async fn test_logql_parse_error_response() {
 #[tokio::test]
 async fn test_logql_query_range_parse_error_response() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let query = urlencoding::encode(r#"{invalid"#);
     let req = Request::builder()
@@ -392,7 +392,7 @@ async fn test_logql_query_range_parse_error_response() {
 #[tokio::test]
 async fn test_promql_parse_error_response() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     // Send a malformed PromQL query
     let query = urlencoding::encode(r#"invalid{[["#);
@@ -419,7 +419,7 @@ async fn test_promql_parse_error_response() {
 #[tokio::test]
 async fn test_promql_query_range_parse_error_response() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let query = urlencoding::encode(r#"}{bad"#);
     let req = Request::builder()
@@ -442,7 +442,7 @@ async fn test_promql_query_range_parse_error_response() {
 #[tokio::test]
 async fn test_traceql_parse_error_response() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     // Send a malformed TraceQL query
     let query = urlencoding::encode(r#"not valid traceql"#);
@@ -475,7 +475,7 @@ async fn test_traceql_parse_error_response() {
 #[tokio::test]
 async fn test_loki_push_returns_no_content() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let push_body = serde_json::json!({
         "streams": [{
@@ -517,7 +517,7 @@ async fn test_loki_push_returns_no_content() {
 #[tokio::test]
 async fn test_otlp_metrics_returns_ack() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let payload =
         helpers::make_gauge_request("ack-svc", "cpu_usage", 42.5, 1_700_000_000_000_000_000);
@@ -549,7 +549,7 @@ async fn test_otlp_metrics_returns_ack() {
 #[tokio::test]
 async fn test_otlp_traces_returns_ack() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let trace_id: [u8; 16] = [0xAC; 16];
     let span_id: [u8; 8] = [0xBD; 8];
@@ -590,7 +590,7 @@ async fn test_otlp_traces_returns_ack() {
 #[tokio::test]
 async fn test_loki_push_invalid_json_returns_bad_request() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let req = Request::builder()
         .method("POST")
@@ -609,7 +609,7 @@ async fn test_loki_push_invalid_json_returns_bad_request() {
 #[tokio::test]
 async fn test_otlp_metrics_invalid_protobuf_returns_bad_request() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let req = Request::builder()
         .method("POST")
@@ -628,7 +628,7 @@ async fn test_otlp_metrics_invalid_protobuf_returns_bad_request() {
 #[tokio::test]
 async fn test_otlp_traces_invalid_protobuf_returns_bad_request() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let req = Request::builder()
         .method("POST")

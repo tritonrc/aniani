@@ -16,7 +16,7 @@ use tower::ServiceExt;
 
 #[test]
 fn test_config_default_bind_address() {
-    let config = obsidian::config::Config {
+    let config = aniani::config::Config {
         port: 4320,
         bind_address: "127.0.0.1".into(),
         snapshot_dir: "/tmp".into(),
@@ -32,8 +32,8 @@ fn test_config_default_bind_address() {
 
 #[test]
 fn test_promql_unsupported_aggregation_errors() {
-    use obsidian::query::promql::eval::evaluate_instant;
-    use obsidian::store::metric_store::{MetricStore, Sample};
+    use aniani::query::promql::eval::evaluate_instant;
+    use aniani::store::metric_store::{MetricStore, Sample};
 
     let mut store = MetricStore::new();
     store.ingest_samples(
@@ -59,14 +59,14 @@ fn test_promql_unsupported_aggregation_errors() {
 #[tokio::test]
 async fn test_promql_timestamp_millis_not_misread() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     {
         let mut store = state.metric_store.write();
         store.ingest_samples(
             "test_metric",
             vec![],
-            vec![obsidian::store::metric_store::Sample {
+            vec![aniani::store::metric_store::Sample {
                 timestamp_ms: 1709251200000,
                 value: 42.0,
             }],
@@ -95,7 +95,7 @@ async fn test_promql_timestamp_millis_not_misread() {
 #[tokio::test]
 async fn test_promql_invalid_time_returns_400() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let req = Request::builder()
         .method("GET")
@@ -109,7 +109,7 @@ async fn test_promql_invalid_time_returns_400() {
 #[tokio::test]
 async fn test_promql_invalid_start_returns_400() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let req = Request::builder()
         .method("GET")
@@ -123,7 +123,7 @@ async fn test_promql_invalid_start_returns_400() {
 #[tokio::test]
 async fn test_logql_invalid_time_returns_400() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let query = urlencoding::encode(r#"{service="test"}"#);
     let req = Request::builder()
@@ -141,7 +141,7 @@ async fn test_logql_invalid_time_returns_400() {
 #[tokio::test]
 async fn test_traceql_search_finds_actual_root() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let trace_id: [u8; 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
     let root_span_id: [u8; 8] = [1, 0, 0, 0, 0, 0, 0, 0];
@@ -249,14 +249,14 @@ async fn test_max_spans_enforced() {
     use std::sync::Arc;
     use std::time::Instant;
 
-    let state = Arc::new(obsidian::store::AppState {
-        log_store: parking_lot::RwLock::new(obsidian::store::LogStore::new()),
-        metric_store: parking_lot::RwLock::new(obsidian::store::MetricStore::new()),
-        trace_store: parking_lot::RwLock::new(obsidian::store::TraceStore::new()),
-        config: obsidian::config::Config {
+    let state = Arc::new(aniani::store::AppState {
+        log_store: parking_lot::RwLock::new(aniani::store::LogStore::new()),
+        metric_store: parking_lot::RwLock::new(aniani::store::MetricStore::new()),
+        trace_store: parking_lot::RwLock::new(aniani::store::TraceStore::new()),
+        config: aniani::config::Config {
             port: 0,
             bind_address: "127.0.0.1".into(),
-            snapshot_dir: "/tmp/obsidian-test".into(),
+            snapshot_dir: "/tmp/aniani-test".into(),
             snapshot_interval: 0,
             max_log_entries: 100000,
             max_series: 10000,
@@ -267,7 +267,7 @@ async fn test_max_spans_enforced() {
         start_time: Instant::now(),
     });
 
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     for i in 0u8..10 {
         let trace_id = [i; 16];
@@ -285,7 +285,7 @@ async fn test_max_spans_enforced() {
         .await;
     }
 
-    obsidian::store::run_eviction(&state);
+    aniani::store::run_eviction(&state);
 
     let store = state.trace_store.read();
     assert!(
@@ -298,7 +298,7 @@ async fn test_max_spans_enforced() {
 #[tokio::test]
 async fn test_loki_protobuf_returns_clear_error() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let req = Request::builder()
         .method("POST")
@@ -313,7 +313,7 @@ async fn test_loki_protobuf_returns_clear_error() {
 #[tokio::test]
 async fn test_status_includes_memory() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let req = Request::builder()
         .method("GET")
@@ -341,7 +341,7 @@ fn gzip_encode(bytes: &[u8]) -> Vec<u8> {
 #[tokio::test]
 async fn test_otlp_metrics_gzip_content_encoding() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let ts_ns = 1_731_000_000_123_000_000u64;
     let payload = helpers::make_gauge_request("payments", "http_requests_total", 42.0, ts_ns);
@@ -369,7 +369,7 @@ async fn test_otlp_metrics_gzip_content_encoding() {
 #[tokio::test]
 async fn test_otlp_traces_gzip_content_encoding() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let trace_id = [0xabu8; 16];
     let span_id = [0x11u8; 8];
@@ -401,14 +401,14 @@ async fn test_otlp_traces_gzip_content_encoding() {
     assert_eq!(spans.len(), 1);
     assert_eq!(
         spans[0].status,
-        obsidian::store::trace_store::SpanStatus::Error
+        aniani::store::trace_store::SpanStatus::Error
     );
     assert_eq!(store.resolve(&spans[0].name), "charge_card");
 }
 
 #[test]
 fn test_trace_store_status_index() {
-    let mut store = obsidian::store::trace_store::TraceStore::new();
+    let mut store = aniani::store::trace_store::TraceStore::new();
 
     let service = store.interner.get_or_intern("gateway");
     let ok_name = store.interner.get_or_intern("ok_span");
@@ -421,7 +421,7 @@ fn test_trace_store_status_index() {
     let unset_trace_id = [4u8; 16];
 
     store.ingest_spans(vec![
-        obsidian::store::trace_store::Span {
+        aniani::store::trace_store::Span {
             trace_id: ok_trace_id,
             span_id: [1u8; 8],
             parent_span_id: None,
@@ -429,10 +429,10 @@ fn test_trace_store_status_index() {
             service_name: service,
             start_time_ns: 1_000,
             duration_ns: 100,
-            status: obsidian::store::trace_store::SpanStatus::Ok,
+            status: aniani::store::trace_store::SpanStatus::Ok,
             attributes: smallvec::SmallVec::new(),
         },
-        obsidian::store::trace_store::Span {
+        aniani::store::trace_store::Span {
             trace_id: error_trace_id_a,
             span_id: [2u8; 8],
             parent_span_id: None,
@@ -440,10 +440,10 @@ fn test_trace_store_status_index() {
             service_name: service,
             start_time_ns: 2_000,
             duration_ns: 100,
-            status: obsidian::store::trace_store::SpanStatus::Error,
+            status: aniani::store::trace_store::SpanStatus::Error,
             attributes: smallvec::SmallVec::new(),
         },
-        obsidian::store::trace_store::Span {
+        aniani::store::trace_store::Span {
             trace_id: error_trace_id_b,
             span_id: [3u8; 8],
             parent_span_id: None,
@@ -451,10 +451,10 @@ fn test_trace_store_status_index() {
             service_name: service,
             start_time_ns: 3_000,
             duration_ns: 100,
-            status: obsidian::store::trace_store::SpanStatus::Error,
+            status: aniani::store::trace_store::SpanStatus::Error,
             attributes: smallvec::SmallVec::new(),
         },
-        obsidian::store::trace_store::Span {
+        aniani::store::trace_store::Span {
             trace_id: unset_trace_id,
             span_id: [4u8; 8],
             parent_span_id: None,
@@ -462,22 +462,22 @@ fn test_trace_store_status_index() {
             service_name: service,
             start_time_ns: 4_000,
             duration_ns: 100,
-            status: obsidian::store::trace_store::SpanStatus::Unset,
+            status: aniani::store::trace_store::SpanStatus::Unset,
             attributes: smallvec::SmallVec::new(),
         },
     ]);
 
     let ok_ids = store
         .status_index
-        .get(&obsidian::store::trace_store::SpanStatus::Ok)
+        .get(&aniani::store::trace_store::SpanStatus::Ok)
         .expect("ok status should be indexed");
     let error_ids = store
         .status_index
-        .get(&obsidian::store::trace_store::SpanStatus::Error)
+        .get(&aniani::store::trace_store::SpanStatus::Error)
         .expect("error status should be indexed");
     let unset_ids = store
         .status_index
-        .get(&obsidian::store::trace_store::SpanStatus::Unset)
+        .get(&aniani::store::trace_store::SpanStatus::Unset)
         .expect("unset status should be indexed");
 
     assert_eq!(ok_ids.len(), 1);
@@ -491,20 +491,20 @@ fn test_trace_store_status_index() {
 
 #[test]
 fn test_config_has_max_series_field() {
-    let config = obsidian::config::Config::parse_from(["obsidian", "--max-series", "2"]);
+    let config = aniani::config::Config::parse_from(["aniani", "--max-series", "2"]);
     assert_eq!(config.max_series, 2);
 }
 
 #[test]
 fn test_max_series_limits_unique_series() {
-    let state: obsidian::store::SharedState = std::sync::Arc::new(obsidian::store::AppState {
-        log_store: parking_lot::RwLock::new(obsidian::store::LogStore::new()),
-        metric_store: parking_lot::RwLock::new(obsidian::store::MetricStore::new()),
-        trace_store: parking_lot::RwLock::new(obsidian::store::TraceStore::new()),
-        config: obsidian::config::Config {
+    let state: aniani::store::SharedState = std::sync::Arc::new(aniani::store::AppState {
+        log_store: parking_lot::RwLock::new(aniani::store::LogStore::new()),
+        metric_store: parking_lot::RwLock::new(aniani::store::MetricStore::new()),
+        trace_store: parking_lot::RwLock::new(aniani::store::TraceStore::new()),
+        config: aniani::config::Config {
             port: 0,
             bind_address: "127.0.0.1".into(),
-            snapshot_dir: "/tmp/obsidian-test".into(),
+            snapshot_dir: "/tmp/aniani-test".into(),
             snapshot_interval: 0,
             max_log_entries: 100_000,
             max_series: 2,
@@ -524,7 +524,7 @@ fn test_max_series_limits_unique_series() {
         let mut store = state.metric_store.write();
         for i in 0..5 {
             let samples = (0..3)
-                .map(|j| obsidian::store::metric_store::Sample {
+                .map(|j| aniani::store::metric_store::Sample {
                     timestamp_ms: now_ms + (i as i64 * 100) + j as i64,
                     value: (i * 10 + j) as f64,
                 })
@@ -537,7 +537,7 @@ fn test_max_series_limits_unique_series() {
         }
     }
 
-    obsidian::store::run_eviction(&state);
+    aniani::store::run_eviction(&state);
 
     let store = state.metric_store.read();
     assert!(

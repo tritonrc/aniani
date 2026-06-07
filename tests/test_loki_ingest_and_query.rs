@@ -12,7 +12,7 @@ use tower::ServiceExt;
 #[tokio::test]
 async fn test_loki_push_and_logql_query() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let push_body = json!({
         "streams": [{
@@ -57,7 +57,7 @@ async fn test_loki_push_and_logql_query() {
 #[tokio::test]
 async fn test_loki_push_and_logql_query_with_filter() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let push_body = json!({
         "streams": [{
@@ -103,7 +103,7 @@ async fn test_loki_push_and_logql_query_with_filter() {
 #[tokio::test]
 async fn test_logql_labels_endpoint() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let push_body = json!({
         "streams": [{

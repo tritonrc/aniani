@@ -3,12 +3,9 @@
 use clap::Parser;
 use std::time::Duration;
 
-/// Obsidian: Lightweight ephemeral observability engine.
+/// Aniani: Lightweight ephemeral observability engine.
 #[derive(Parser, Debug, Clone)]
-#[command(
-    name = "obsidian",
-    about = "Lightweight ephemeral observability engine"
-)]
+#[command(name = "aniani", about = "Lightweight ephemeral observability engine")]
 pub struct Config {
     /// Bind address for the server.
     #[arg(long, default_value = "127.0.0.1")]
@@ -19,7 +16,7 @@ pub struct Config {
     pub port: u16,
 
     /// Directory for snapshots.
-    #[arg(long, default_value = ".obsidian/")]
+    #[arg(long, default_value = ".aniani/")]
     pub snapshot_dir: String,
 
     /// Auto-snapshot interval in seconds, 0 to disable.

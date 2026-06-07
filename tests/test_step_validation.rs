@@ -10,7 +10,7 @@ use tower::ServiceExt;
 #[tokio::test]
 async fn test_promql_query_range_step_zero() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
     let req = Request::builder()
         .method("GET")
         .uri("/api/v1/query_range?query=up&start=0&end=1000&step=0s")
@@ -23,7 +23,7 @@ async fn test_promql_query_range_step_zero() {
 #[tokio::test]
 async fn test_logql_query_range_step_zero() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
     let query = urlencoding::encode(r#"{service="test"}"#);
     let req = Request::builder()
         .method("GET")

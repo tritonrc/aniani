@@ -155,7 +155,7 @@ fn hex_trace_id(bytes: &[u8; 16]) -> String {
 #[tokio::test]
 async fn test_otlp_logs_ingest_and_logql_query() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let ts_ns = 1_700_000_000_000_000_000u64;
     let payload = make_logs_request(
@@ -213,7 +213,7 @@ async fn test_otlp_logs_ingest_and_logql_query() {
 #[tokio::test]
 async fn test_otlp_logs_empty_request_returns_204() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     // Empty request with no resource_logs
     let payload = ExportLogsServiceRequest {
@@ -238,7 +238,7 @@ async fn test_otlp_logs_empty_request_returns_204() {
 #[tokio::test]
 async fn test_otlp_logs_malformed_body_returns_400() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let req = Request::builder()
         .method("POST")
@@ -266,7 +266,7 @@ async fn test_otlp_logs_malformed_body_returns_400() {
 #[tokio::test]
 async fn test_diagnose_endpoint_returns_error_signals() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let now_ns = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -405,7 +405,7 @@ async fn test_diagnose_endpoint_returns_error_signals() {
 #[tokio::test]
 async fn test_diagnose_endpoint_unknown_service_returns_healthy() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let req = Request::builder()
         .method("GET")
@@ -438,7 +438,7 @@ async fn test_diagnose_endpoint_unknown_service_returns_healthy() {
 #[tokio::test]
 async fn test_diagnose_endpoint_no_service_returns_global_overview() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let req = Request::builder()
         .method("GET")
@@ -468,7 +468,7 @@ async fn test_diagnose_endpoint_no_service_returns_global_overview() {
 #[tokio::test]
 async fn test_trace_search_filters_by_epoch_second_range() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     // Three traces at well-separated times
     let t1_ns = 1_700_000_000_000_000_000u64; // epoch second 1700000000
@@ -519,7 +519,7 @@ async fn test_trace_search_filters_by_epoch_second_range() {
 #[tokio::test]
 async fn test_trace_search_without_time_range_returns_all() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let t1_ns = 1_700_000_000_000_000_000u64;
     let t2_ns = 1_700_001_000_000_000_000u64;
@@ -561,7 +561,7 @@ async fn test_trace_search_without_time_range_returns_all() {
 #[tokio::test]
 async fn test_promql_topk_returns_top_k_series() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -576,7 +576,7 @@ async fn test_promql_topk_returns_top_k_series() {
             store.ingest_samples(
                 "cpu_usage",
                 vec![("instance".into(), format!("node-{}", i))],
-                vec![obsidian::store::metric_store::Sample {
+                vec![aniani::store::metric_store::Sample {
                     timestamp_ms: now_ms,
                     value: *val,
                 }],
@@ -619,7 +619,7 @@ async fn test_promql_topk_returns_top_k_series() {
 #[tokio::test]
 async fn test_promql_bottomk_returns_bottom_k_series() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -632,7 +632,7 @@ async fn test_promql_bottomk_returns_bottom_k_series() {
             store.ingest_samples(
                 "mem_usage",
                 vec![("instance".into(), format!("node-{}", i))],
-                vec![obsidian::store::metric_store::Sample {
+                vec![aniani::store::metric_store::Sample {
                     timestamp_ms: now_ms,
                     value: *val,
                 }],
@@ -674,7 +674,7 @@ async fn test_promql_bottomk_returns_bottom_k_series() {
 #[tokio::test]
 async fn test_promql_topk_with_k_larger_than_series_count() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -686,7 +686,7 @@ async fn test_promql_topk_with_k_larger_than_series_count() {
         store.ingest_samples(
             "lone_metric",
             vec![("host".into(), "a".into())],
-            vec![obsidian::store::metric_store::Sample {
+            vec![aniani::store::metric_store::Sample {
                 timestamp_ms: now_ms,
                 value: 42.0,
             }],

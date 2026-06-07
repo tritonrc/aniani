@@ -1,4 +1,4 @@
-//! Obsidian: Lightweight ephemeral observability engine.
+//! Aniani: Lightweight ephemeral observability engine.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -8,9 +8,9 @@ use clap::Parser;
 use parking_lot::RwLock;
 use tokio::net::TcpListener;
 
-use obsidian::config::Config;
-use obsidian::snapshot;
-use obsidian::store::{self, AppState, LogStore, MetricStore, SharedState, TraceStore};
+use aniani::config::Config;
+use aniani::snapshot;
+use aniani::store::{self, AppState, LogStore, MetricStore, SharedState, TraceStore};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -106,10 +106,10 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Build router and start server
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
     let addr = format!("{}:{}", config.bind_address, config.port);
     let listener = TcpListener::bind(&addr).await?;
-    tracing::info!("obsidian listening on {}", addr);
+    tracing::info!("aniani listening on {}", addr);
 
     // Graceful shutdown: wait for SIGTERM (or ctrl-c), save snapshot, then exit
     let shutdown_state = state.clone();

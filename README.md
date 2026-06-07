@@ -1,20 +1,20 @@
-# Obsidian
+# Aniani
 
 Getting observability into a development harness is usually expensive: you need a metrics collector, a log aggregator, a trace backend, each with its own config, ports, and lifecycle. When you're running multiple agents in parallel across git worktrees — each worktree a full isolated environment — that cost multiplies.
 
-Obsidian collapses it to a single binary. One process, one port, three query surfaces (LogQL, PromQL, TraceQL) over in-memory stores. Services point their OTLP exporter at it directly — no collector, no sidecar, no config file. Drop it into your worktree boot script and it's gone when the worktree is.
+Aniani collapses it to a single binary. One process, one port, three query surfaces (LogQL, PromQL, TraceQL) over in-memory stores. Services point their OTLP exporter at it directly — no collector, no sidecar, no config file. Drop it into your worktree boot script and it's gone when the worktree is.
 
 ---
 
 ## The Worktree Model
 
-Each git worktree runs an independent copy of your services. Obsidian boots alongside them:
+Each git worktree runs an independent copy of your services. Aniani boots alongside them:
 
 ```bash
 #!/bin/bash
 # boot.sh — start everything for this worktree
 
-obsidian --port 4320 --retention 2h &
+aniani --port 4320 --retention 2h &
 
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4320 \
 OTEL_SERVICE_NAME=api-gateway \
@@ -25,24 +25,24 @@ OTEL_SERVICE_NAME=payments \
   ./payments-engine &
 ```
 
-All services in the worktree share one Obsidian instance. Each agent working in its own worktree gets its own isolated Obsidian. When the worktree is discarded, so is the telemetry.
+All services in the worktree share one Aniani instance. Each agent working in its own worktree gets its own isolated Aniani. When the worktree is discarded, so is the telemetry.
 
-Running 8 agents in parallel across 8 worktrees means 8 independent Obsidian instances — no cross-contamination, no coordination, no shared state to clean up.
+Running 8 agents in parallel across 8 worktrees means 8 independent Aniani instances — no cross-contamination, no coordination, no shared state to clean up.
 
 ---
 
 ## Install
 
-Download a prebuilt binary from [Releases](https://github.com/tritonrc/obsidian/releases):
+Download a prebuilt binary from [Releases](https://github.com/tritonrc/aniani/releases):
 
 ```bash
 # macOS (Apple Silicon)
-curl -L https://github.com/tritonrc/obsidian/releases/latest/download/obsidian-macos-arm64.tar.gz | tar xz
-chmod +x obsidian && mv obsidian /usr/local/bin/
+curl -L https://github.com/tritonrc/aniani/releases/latest/download/aniani-macos-arm64.tar.gz | tar xz
+chmod +x aniani && mv aniani /usr/local/bin/
 
 # Linux (x86_64)
-curl -L https://github.com/tritonrc/obsidian/releases/latest/download/obsidian-linux-x86_64.tar.gz | tar xz
-chmod +x obsidian && mv obsidian /usr/local/bin/
+curl -L https://github.com/tritonrc/aniani/releases/latest/download/aniani-linux-x86_64.tar.gz | tar xz
+chmod +x aniani && mv aniani /usr/local/bin/
 ```
 
 Or build from source:
@@ -56,12 +56,12 @@ cargo build --release
 ## Usage
 
 ```
-obsidian [OPTIONS]
+aniani [OPTIONS]
 
 OPTIONS:
     --bind-address <ADDR>          Bind address (default: 127.0.0.1)
     --port <PORT>                  Listen port (default: 4320)
-    --snapshot-dir <PATH>          Snapshot directory (default: .obsidian/)
+    --snapshot-dir <PATH>          Snapshot directory (default: .aniani/)
     --snapshot-interval <SECS>     Auto-snapshot interval, 0 to disable (default: 0)
     --max-log-entries <N>          Max log entries before eviction (default: 100000)
     --max-series <N>               Max metric series before eviction (default: 10000)
@@ -74,17 +74,17 @@ For parallel worktrees, derive the port from the worktree name to avoid conflict
 
 ```bash
 PORT=$(( ($(basename $(git rev-parse --show-toplevel) | cksum | cut -d' ' -f1) % 1000) + 4000 ))
-obsidian --port $PORT --retention 2h &
+aniani --port $PORT --retention 2h &
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:$PORT
 ```
 
 To listen on all interfaces (e.g. when running in a container or accepting traffic from other hosts):
 
 ```bash
-obsidian --bind-address 0.0.0.0 --port 4320
+aniani --bind-address 0.0.0.0 --port 4320
 ```
 
-Obsidian disables permissive browser CORS by default. If you expose it beyond loopback, treat it as an unauthenticated internal service and front it with your own network controls or proxy.
+Aniani disables permissive browser CORS by default. If you expose it beyond loopback, treat it as an unauthenticated internal service and front it with your own network controls or proxy.
 
 ---
 
@@ -123,7 +123,7 @@ The `resource.service.name` attribute from OTLP is promoted to a `service` label
 
 ## Agent Workflow
 
-Obsidian is designed for programmatic discovery. An agent investigating a system follows this flow:
+Aniani is designed for programmatic discovery. An agent investigating a system follows this flow:
 
 ```
 1. GET /api/v1/services          — what services are reporting?
@@ -219,20 +219,20 @@ Useful when an agent needs to hand off state to a new session:
 
 ```bash
 # On-demand snapshot
-kill -USR1 $(pgrep obsidian)
+kill -USR1 $(pgrep aniani)
 
 # Auto-snapshot every 60 seconds
-obsidian --snapshot-interval 60 --snapshot-dir .obsidian/
+aniani --snapshot-interval 60 --snapshot-dir .aniani/
 
 # Restore on next boot
-obsidian --restore --snapshot-dir .obsidian/
+aniani --restore --snapshot-dir .aniani/
 ```
 
 ---
 
 ## What It's Not
 
-Obsidian is purpose-built for ephemeral agent workflows. It is not:
+Aniani is purpose-built for ephemeral agent workflows. It is not:
 
 - A production observability backend
 - A replacement for Loki, Prometheus, or Tempo

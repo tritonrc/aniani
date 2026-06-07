@@ -130,7 +130,7 @@ fn make_trace_request_with_string_attribute(
 #[tokio::test]
 async fn test_loki_query_range_accepts_post_form_body() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     // Ingest a log entry so the query returns results
     push_logs(&app, "web", "hello world", "1700000000000000000").await;
@@ -182,7 +182,7 @@ async fn test_loki_query_range_accepts_post_form_body() {
 #[tokio::test]
 async fn test_promql_query_accepts_post_form_body() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     // Ingest a metric
     ingest_metrics(&app, "api", "up", 1.0, 5_000_000_000).await;
@@ -231,7 +231,7 @@ async fn test_promql_query_accepts_post_form_body() {
 #[tokio::test]
 async fn test_catalog_endpoint_returns_signal_catalog_for_service() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     catalog_data(&app).await;
 
@@ -280,7 +280,7 @@ async fn test_catalog_endpoint_returns_signal_catalog_for_service() {
 #[tokio::test]
 async fn test_catalog_endpoint_returns_empty_arrays_for_unknown_service() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     catalog_data(&app).await;
 
@@ -313,7 +313,7 @@ async fn test_catalog_endpoint_returns_empty_arrays_for_unknown_service() {
 #[tokio::test]
 async fn test_catalog_endpoint_requires_service_param() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let req = Request::builder()
         .method("GET")
@@ -331,7 +331,7 @@ async fn test_catalog_endpoint_requires_service_param() {
 #[tokio::test]
 async fn test_save_from_state_creates_snapshot_file() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     // Ingest some data so the snapshot is non-trivial
     push_logs(&app, "snap-svc", "snapshot test", "1700000000000000000").await;
@@ -347,9 +347,9 @@ async fn test_save_from_state_creates_snapshot_file() {
     let dir = tempdir().unwrap();
 
     // save_from_state does not return a Result; it logs errors internally
-    obsidian::snapshot::save_from_state(&state, dir.path());
+    aniani::snapshot::save_from_state(&state, dir.path());
 
-    let snap_path = dir.path().join("obsidian.snap");
+    let snap_path = dir.path().join("aniani.snap");
     assert!(
         snap_path.exists(),
         "snapshot file should exist at {:?}",
@@ -431,7 +431,7 @@ fn otlp_traces_json(
 #[tokio::test]
 async fn test_otlp_metrics_accepts_json_payloads() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let json_body = otlp_metrics_json("billing", "invoice_count", 7.0, 1_700_000_000_000_000_000);
 
@@ -459,7 +459,7 @@ async fn test_otlp_metrics_accepts_json_payloads() {
 #[tokio::test]
 async fn test_otlp_traces_accepts_json_payloads() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     // Use hex-encoded trace/span IDs (proto3 JSON encodes bytes as base64,
     // but the OTLP spec uses hex for trace/span IDs in JSON encoding)
@@ -497,7 +497,7 @@ async fn test_otlp_traces_accepts_json_payloads() {
 #[tokio::test]
 async fn test_otlp_metrics_protobuf_remains_supported() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let payload =
         helpers::make_gauge_request("legacy-svc", "latency_ms", 55.0, 1_700_000_000_000_000_000);
@@ -524,7 +524,7 @@ async fn test_otlp_metrics_protobuf_remains_supported() {
 #[tokio::test]
 async fn test_otlp_traces_protobuf_remains_supported() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let trace_id: [u8; 16] = [0xee; 16];
     let span_id: [u8; 8] = [0xff; 8];

@@ -1,10 +1,10 @@
-# Obsidian: Lightweight Ephemeral Observability Engine
+# Aniani: Lightweight Ephemeral Observability Engine
 
 ## Overview
 
-A single Rust binary exposing three API surfaces — LogQL, PromQL, and TraceQL — designed for ephemeral, per-worktree observability. A single Obsidian instance serves all services in a worktree (e.g. API gateway, payments engine, worker processes). Services are distinguished by labels (`service`, `resource.service.name`) and queryable independently or in aggregate. Services send telemetry directly to Obsidian via OTLP/HTTP (metrics, traces, logs) and Loki push API (logs). Everything is stored in-memory with optional snapshot-to-disk. Obsidian supports the 80/20 subset of each query language that agents need to reason about runtime behavior.
+A single Rust binary exposing three API surfaces — LogQL, PromQL, and TraceQL — designed for ephemeral, per-worktree observability. A single Aniani instance serves all services in a worktree (e.g. API gateway, payments engine, worker processes). Services are distinguished by labels (`service`, `resource.service.name`) and queryable independently or in aggregate. Services send telemetry directly to Aniani via OTLP/HTTP (metrics, traces, logs) and Loki push API (logs). Everything is stored in-memory with optional snapshot-to-disk. Aniani supports the 80/20 subset of each query language that agents need to reason about runtime behavior.
 
-The name "Obsidian" is a placeholder — dark, glassy, reflects everything clearly.
+The name "Aniani" is Hawaiian for *mirror; clear, transparent glass* — it reflects your running system back to you, clearly.
 
 ---
 
@@ -20,7 +20,7 @@ The name "Obsidian" is a placeholder — dark, glassy, reflects everything clear
                                     │         ┌────────────────┘
                                     ▼         ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│                           OBSIDIAN                                   │
+│                           ANIANI                                   │
 │                                                                      │
 │  ┌───────────────────────────────────────────────────────────────┐   │
 │  │                     Axum HTTP Server                          │   │
@@ -111,14 +111,14 @@ The name "Obsidian" is a placeholder — dark, glassy, reflects everything clear
 ## CLI Interface
 
 ```
-obsidian [OPTIONS]
+aniani [OPTIONS]
 
 OPTIONS:
     --port <PORT>              Base port (default: 4320)
                                Loki push:  {port}
                                OTLP:       {port}
                                Query APIs: {port}
-    --snapshot-dir <PATH>      Directory for snapshots (default: .obsidian/)
+    --snapshot-dir <PATH>      Directory for snapshots (default: .aniani/)
     --snapshot-interval <SECS> Auto-snapshot interval, 0 to disable (default: 0)
     --max-log-entries <N>      Max log entries before eviction (default: 100_000)
     --max-series <N>           Max metric series (default: 10_000)
@@ -204,7 +204,7 @@ Accepts Prometheus remote write format for services that use the Prometheus clie
 
 ## Service Label Conventions
 
-Obsidian normalizes service identity across all three signal types:
+Aniani normalizes service identity across all three signal types:
 
 | Signal | Source of service identity | Indexed as |
 |---|---|---|
@@ -250,7 +250,7 @@ Agents need to enumerate what services are reporting telemetry before writing ta
 | `GET /api/v1/catalog` | Enumerate all known metric names, label names, and trace attributes |
 | `GET /api/v1/summary` | Compact summary of ingested data across all stores |
 | `GET /api/v1/metadata` | Metric type metadata (compatible with Prometheus metadata endpoint) |
-| `GET /api/v1/openapi.json` | OpenAPI specification for all Obsidian endpoints |
+| `GET /api/v1/openapi.json` | OpenAPI specification for all Aniani endpoints |
 | `DELETE /api/v1/reset` | Clear all stores (useful for test isolation) |
 
 ```json
@@ -391,10 +391,10 @@ let snapshot = Snapshot {
     timestamp: SystemTime::now(),
 };
 let bytes = bincode::serialize(&snapshot)?;
-fs::write(snapshot_dir.join("obsidian.snap"), bytes)?;
+fs::write(snapshot_dir.join("aniani.snap"), bytes)?;
 
 // On --restore:
-let bytes = fs::read(snapshot_dir.join("obsidian.snap"))?;
+let bytes = fs::read(snapshot_dir.join("aniani.snap"))?;
 let snapshot: Snapshot = bincode::deserialize(&bytes)?;
 // hydrate stores...
 ```
@@ -637,10 +637,10 @@ fn ingest_metrics(req: ExportMetricsServiceRequest, store: &mut MetricStore) {
 
 ### Multi-Service Model
 
-A typical worktree runs multiple services — an API gateway, a core payments engine, background workers, maybe a risk evaluator. All services send telemetry to a single Obsidian instance. Service identity flows through naturally:
+A typical worktree runs multiple services — an API gateway, a core payments engine, background workers, maybe a risk evaluator. All services send telemetry to a single Aniani instance. Service identity flows through naturally:
 
-- **Metrics/Traces (OTLP):** The `resource.service.name` attribute is set by each service's OpenTelemetry SDK initialization. Obsidian extracts this on ingest and indexes it as a label, so `{service="payments-engine"}` and `{service="risk-evaluator"}` resolve to different posting lists.
-- **Logs (Loki push / OTLP):** The sending service includes a `service` label in stream labels (Loki push) or sets `resource.service.name` (OTLP logs). Obsidian indexes it the same way in both cases.
+- **Metrics/Traces (OTLP):** The `resource.service.name` attribute is set by each service's OpenTelemetry SDK initialization. Aniani extracts this on ingest and indexes it as a label, so `{service="payments-engine"}` and `{service="risk-evaluator"}` resolve to different posting lists.
+- **Logs (Loki push / OTLP):** The sending service includes a `service` label in stream labels (Loki push) or sets `resource.service.name` (OTLP logs). Aniani indexes it the same way in both cases.
 
 Agents can query a single service (`{service="payments-engine"} |= "timeout"`), compare across services (`rate(http_requests_total{service=~"api-gateway|payments-engine"}[5m])`), or trace a request across service boundaries via TraceQL's structural operators.
 
@@ -663,7 +663,7 @@ Implementation: union of unique values for the `service` label key (logs/metrics
 
 ### Boot Script
 
-The boot script starts Obsidian once, then boots all services pointing directly at it:
+The boot script starts Aniani once, then boots all services pointing directly at it:
 
 ```bash
 #!/bin/bash
@@ -671,32 +671,32 @@ TREE_ID=$(basename "$(git rev-parse --show-toplevel)")
 
 if [ ! -f .env.local ]; then
   BASE_PORT=$(( ($(echo "$TREE_ID" | cksum | cut -d' ' -f1) % 1000) + 3000 ))
-  OBSIDIAN_PORT=$(( BASE_PORT + 100 ))
+  ANIANI_PORT=$(( BASE_PORT + 100 ))
   cat > .env.local <<EOF
 BASE_PORT=$BASE_PORT
-OBSIDIAN_PORT=$OBSIDIAN_PORT
+ANIANI_PORT=$ANIANI_PORT
 DATABASE_URL=postgres://localhost/myapp_$TREE_ID
 EOF
 fi
 
 source .env.local
 
-# 1. Boot obsidian (single instance for all services)
-obsidian \
-  --port "$OBSIDIAN_PORT" \
-  --snapshot-dir ".obsidian/" \
+# 1. Boot aniani (single instance for all services)
+aniani \
+  --port "$ANIANI_PORT" \
+  --snapshot-dir ".aniani/" \
   --retention "2h" &
 
-# 2. Boot services (each sends OTLP directly to Obsidian)
-OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:${OBSIDIAN_PORT}" \
+# 2. Boot services (each sends OTLP directly to Aniani)
+OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:${ANIANI_PORT}" \
 OTEL_SERVICE_NAME="api-gateway" \
   ./target/release/api-gateway --port $((BASE_PORT)) &
 
-OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:${OBSIDIAN_PORT}" \
+OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:${ANIANI_PORT}" \
 OTEL_SERVICE_NAME="payments-engine" \
   ./target/release/payments-engine --port $((BASE_PORT + 1)) &
 
-OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:${OBSIDIAN_PORT}" \
+OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:${ANIANI_PORT}" \
 OTEL_SERVICE_NAME="risk-evaluator" \
   ./target/release/risk-evaluator --port $((BASE_PORT + 2)) &
 
@@ -755,7 +755,7 @@ Using `promql-parser`, `opentelemetry-proto`, and `lasso` compresses the timelin
 - SIGUSR1 handler for on-demand snapshot + `--restore` flag
 - Timer-based auto-snapshot
 - Clear error response for native Loki protobuf push attempts
-- End-to-end integration test: service → Obsidian → query
+- End-to-end integration test: service → Aniani → query
 - Worktree boot script
 
 ---
@@ -763,7 +763,7 @@ Using `promql-parser`, `opentelemetry-proto`, and `lasso` compresses the timelin
 ## What's Intentionally Out of Scope
 
 - **Alerting / recording rules** — agents query on demand, no need for continuous evaluation
-- **Multi-tenancy** — one Obsidian instance per worktree. Multiple services within a worktree are supported (separated by labels), but there's no tenant isolation between different users/teams
+- **Multi-tenancy** — one Aniani instance per worktree. Multiple services within a worktree are supported (separated by labels), but there's no tenant isolation between different users/teams
 - **Distributed operation** — single-node only
 - **Persistent WAL** — snapshots are sufficient for this use case
 - **Full spec compliance** — we implement what agents need, not what Grafana Cloud needs

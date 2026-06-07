@@ -12,7 +12,7 @@ use tower::ServiceExt;
 #[tokio::test]
 async fn test_otlp_traces_and_traceql_query() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let trace_id: [u8; 16] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
     let span_id: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
@@ -49,7 +49,7 @@ async fn test_otlp_traces_and_traceql_query() {
 #[tokio::test]
 async fn test_get_trace_by_id() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let trace_id: [u8; 16] = [
         0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67,

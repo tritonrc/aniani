@@ -12,7 +12,7 @@ use tower::ServiceExt;
 #[tokio::test]
 async fn test_services_endpoint_all_signals() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     push_logs(&app, "payments", "payment ok", "1700000000000000000").await;
     ingest_metrics(&app, "gateway", "cpu_usage", 0.5, 1_000_000_000).await;
@@ -69,7 +69,7 @@ async fn test_services_endpoint_all_signals() {
 #[tokio::test]
 async fn test_services_endpoint_multi_signal_service() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     push_logs(&app, "payments", "payment ok", "1700000000000000000").await;
     ingest_metrics(&app, "payments", "request_count", 42.0, 1_000_000_000).await;

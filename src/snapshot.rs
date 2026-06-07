@@ -47,8 +47,8 @@ pub fn save_snapshot_owned(
     };
 
     let bytes = bincode::serialize(&snapshot)?;
-    let tmp_path = dir.join("obsidian.snap.tmp");
-    let final_path = dir.join("obsidian.snap");
+    let tmp_path = dir.join("aniani.snap.tmp");
+    let final_path = dir.join("aniani.snap");
 
     fs::write(&tmp_path, &bytes)?;
     fs::rename(&tmp_path, &final_path)?;
@@ -63,7 +63,7 @@ pub fn save_snapshot_owned(
 
 /// Load a snapshot from disk.
 pub fn load_snapshot(dir: &Path) -> Result<(LogStore, MetricStore, TraceStore)> {
-    let path = dir.join("obsidian.snap");
+    let path = dir.join("aniani.snap");
     let bytes = fs::read(&path)?;
     let mut snapshot: Snapshot = bincode::deserialize(&bytes).map_err(|e| {
         anyhow::anyhow!(

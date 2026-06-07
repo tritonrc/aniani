@@ -123,8 +123,8 @@ fn make_remote_write_request(
     service: &str,
     value: f64,
     timestamp_ms: i64,
-) -> obsidian::ingest::remote_write::WriteRequest {
-    use obsidian::ingest::remote_write::{RemoteLabel, RemoteSample, TimeSeries, WriteRequest};
+) -> aniani::ingest::remote_write::WriteRequest {
+    use aniani::ingest::remote_write::{RemoteLabel, RemoteSample, TimeSeries, WriteRequest};
     WriteRequest {
         timeseries: vec![TimeSeries {
             labels: vec![
@@ -188,11 +188,11 @@ fn make_summary_request(
 async fn test_e2e_smoke_all_features() {
     // ======= SERVER SETUP =======
     let tmp_dir = tempfile::tempdir().unwrap();
-    let state: obsidian::store::SharedState = Arc::new(obsidian::store::AppState {
-        log_store: RwLock::new(obsidian::store::LogStore::new()),
-        metric_store: RwLock::new(obsidian::store::MetricStore::new()),
-        trace_store: RwLock::new(obsidian::store::TraceStore::new()),
-        config: obsidian::config::Config {
+    let state: aniani::store::SharedState = Arc::new(aniani::store::AppState {
+        log_store: RwLock::new(aniani::store::LogStore::new()),
+        metric_store: RwLock::new(aniani::store::MetricStore::new()),
+        trace_store: RwLock::new(aniani::store::TraceStore::new()),
+        config: aniani::config::Config {
             port: 0,
             bind_address: "127.0.0.1".into(),
             snapshot_dir: tmp_dir.path().to_string_lossy().into_owned(),
@@ -206,7 +206,7 @@ async fn test_e2e_smoke_all_features() {
         start_time: std::time::Instant::now(),
     });
 
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
     let server = tokio::spawn(async move {
@@ -2013,21 +2013,21 @@ async fn test_e2e_smoke_all_features() {
 
     // Step 1: Save snapshot from current state
     let snap_dir = tmp_dir.path().join("snap_test");
-    obsidian::snapshot::save_from_state(&state, &snap_dir);
+    aniani::snapshot::save_from_state(&state, &snap_dir);
     assert!(
-        snap_dir.join("obsidian.snap").exists(),
+        snap_dir.join("aniani.snap").exists(),
         "snapshot file should exist after save"
     );
 
     // Step 2: Load snapshot into a new server state
     let (restored_logs, restored_metrics, restored_traces) =
-        obsidian::snapshot::load_snapshot(&snap_dir).unwrap();
+        aniani::snapshot::load_snapshot(&snap_dir).unwrap();
 
-    let restored_state: obsidian::store::SharedState = Arc::new(obsidian::store::AppState {
+    let restored_state: aniani::store::SharedState = Arc::new(aniani::store::AppState {
         log_store: RwLock::new(restored_logs),
         metric_store: RwLock::new(restored_metrics),
         trace_store: RwLock::new(restored_traces),
-        config: obsidian::config::Config {
+        config: aniani::config::Config {
             port: 0,
             bind_address: "127.0.0.1".into(),
             snapshot_dir: tmp_dir.path().to_string_lossy().into_owned(),
@@ -2041,7 +2041,7 @@ async fn test_e2e_smoke_all_features() {
         start_time: std::time::Instant::now(),
     });
 
-    let restored_app = obsidian::server::build_router(restored_state);
+    let restored_app = aniani::server::build_router(restored_state);
     let restored_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let restored_base = format!(
         "http://127.0.0.1:{}",

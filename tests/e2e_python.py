@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-External black-box E2E test for Obsidian.
+External black-box E2E test for Aniani.
 
 Boots the release binary, sends telemetry via HTTP, queries every endpoint,
 and verifies responses. Uses only Python stdlib — no pip dependencies.
@@ -22,7 +22,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-BINARY = os.path.join(os.path.dirname(__file__), "..", "target", "release", "obsidian")
+BINARY = os.path.join(os.path.dirname(__file__), "..", "target", "release", "aniani")
 PASS = 0
 FAIL = 0
 TOTAL = 0
@@ -85,7 +85,7 @@ def main():
     port = find_free_port()
     base = f"http://127.0.0.1:{port}"
 
-    # Boot Obsidian
+    # Boot Aniani
     proc = subprocess.Popen(
         [BINARY, "--port", str(port)],
         stdout=subprocess.PIPE,
@@ -93,11 +93,11 @@ def main():
     )
 
     try:
-        print(f"\nBooting Obsidian on port {port}...")
+        print(f"\nBooting Aniani on port {port}...")
         if not wait_for_ready(base):
-            print("FATAL: Obsidian did not become ready")
+            print("FATAL: Aniani did not become ready")
             sys.exit(1)
-        print(f"Obsidian ready (PID {proc.pid})\n")
+        print(f"Aniani ready (PID {proc.pid})\n")
 
         now_ns = int(time.time() * 1e9)
         now_s = int(time.time())
@@ -539,7 +539,7 @@ def main():
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
-        print(f"\nObsidian shut down (PID {proc.pid})")
+        print(f"\nAniani shut down (PID {proc.pid})")
 
     sys.exit(1 if FAIL > 0 else 0)
 

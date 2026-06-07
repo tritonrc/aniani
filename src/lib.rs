@@ -1,4 +1,4 @@
-//! Obsidian: Lightweight ephemeral observability engine library.
+//! Aniani: Lightweight ephemeral observability engine library.
 
 pub mod api;
 pub mod config;

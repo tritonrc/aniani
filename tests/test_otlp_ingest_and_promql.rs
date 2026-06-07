@@ -12,7 +12,7 @@ use tower::ServiceExt;
 #[tokio::test]
 async fn test_otlp_metrics_and_promql_query() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     ingest_metrics(&app, "payments", "cpu_usage", 0.75, 5_000_000_000).await;
 
@@ -41,7 +41,7 @@ async fn test_otlp_metrics_and_promql_query() {
 #[tokio::test]
 async fn test_promql_labels_endpoint() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     ingest_metrics(&app, "api", "http_requests", 100.0, 1_000_000_000).await;
 

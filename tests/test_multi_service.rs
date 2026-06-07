@@ -12,7 +12,7 @@ use tower::ServiceExt;
 #[tokio::test]
 async fn test_multi_service_query_independently() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     push_logs(&app, "payments", "payment processed", "1700000000000000000").await;
     push_logs(&app, "gateway", "request received", "1700000000100000000").await;
@@ -59,7 +59,7 @@ async fn test_multi_service_query_independently() {
 #[tokio::test]
 async fn test_multi_service_query_with_regex() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     push_logs(&app, "payments", "payment processed", "1700000000000000000").await;
     push_logs(&app, "gateway", "request received", "1700000000100000000").await;

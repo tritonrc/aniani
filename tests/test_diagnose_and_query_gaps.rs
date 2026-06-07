@@ -96,7 +96,7 @@ fn hex_trace_id(bytes: &[u8; 16]) -> String {
 #[tokio::test]
 async fn test_diagnose_returns_health_assessment() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let now_ns = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -212,7 +212,7 @@ async fn test_diagnose_returns_health_assessment() {
 #[tokio::test]
 async fn test_diagnose_global_returns_service_list() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let now_ns = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -304,7 +304,7 @@ async fn test_diagnose_global_returns_service_list() {
 #[tokio::test]
 async fn test_diagnose_unknown_service_returns_healthy() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let (status, json) = get_json(&app, "/api/v1/diagnose?service=nonexistent").await;
     assert_eq!(status, StatusCode::OK);
@@ -329,7 +329,7 @@ async fn test_diagnose_unknown_service_returns_healthy() {
 #[tokio::test]
 async fn test_logql_sum_over_time_on_numeric_lines() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let ts_base = 1_700_000_000_000_000_000u64;
     let push_body = serde_json::json!({
@@ -377,7 +377,7 @@ async fn test_logql_sum_over_time_on_numeric_lines() {
 #[tokio::test]
 async fn test_logql_avg_over_time_on_numeric_lines() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let ts_base = 1_700_000_000_000_000_000u64;
     let push_body = serde_json::json!({
@@ -424,7 +424,7 @@ async fn test_logql_avg_over_time_on_numeric_lines() {
 #[tokio::test]
 async fn test_logql_min_over_time_on_numeric_lines() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let ts_base = 1_700_000_000_000_000_000u64;
     let push_body = serde_json::json!({
@@ -470,7 +470,7 @@ async fn test_logql_min_over_time_on_numeric_lines() {
 #[tokio::test]
 async fn test_logql_max_over_time_on_numeric_lines() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let ts_base = 1_700_000_000_000_000_000u64;
     let push_body = serde_json::json!({
@@ -523,7 +523,7 @@ async fn test_logql_max_over_time_on_numeric_lines() {
 #[tokio::test]
 async fn test_logql_logfmt_parser_stage() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let ts_base = 1_700_000_000_000_000_000u64;
     let push_body = serde_json::json!({
@@ -580,7 +580,7 @@ async fn test_logql_logfmt_parser_stage() {
 #[tokio::test]
 async fn test_logql_logfmt_extracts_numeric_field() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let ts_base = 1_700_000_000_000_000_000u64;
     let push_body = serde_json::json!({
@@ -632,7 +632,7 @@ async fn test_logql_logfmt_extracts_numeric_field() {
 #[tokio::test]
 async fn test_promql_absent_returns_1_for_missing_metric() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -658,7 +658,7 @@ async fn test_promql_absent_returns_1_for_missing_metric() {
 #[tokio::test]
 async fn test_promql_absent_returns_empty_for_existing_metric() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -672,7 +672,7 @@ async fn test_promql_absent_returns_empty_for_existing_metric() {
         store.ingest_samples(
             "existing_metric",
             vec![("host".into(), "a".into())],
-            vec![obsidian::store::metric_store::Sample {
+            vec![aniani::store::metric_store::Sample {
                 timestamp_ms: now_ms,
                 value: 42.0,
             }],
@@ -697,7 +697,7 @@ async fn test_promql_absent_returns_empty_for_existing_metric() {
 #[tokio::test]
 async fn test_promql_delta() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let base_ms = 1_700_000_000_000i64;
 
@@ -707,15 +707,15 @@ async fn test_promql_delta() {
             "temperature",
             vec![("sensor".into(), "a".into())],
             vec![
-                obsidian::store::metric_store::Sample {
+                aniani::store::metric_store::Sample {
                     timestamp_ms: base_ms,
                     value: 20.0,
                 },
-                obsidian::store::metric_store::Sample {
+                aniani::store::metric_store::Sample {
                     timestamp_ms: base_ms + 60_000,
                     value: 25.0,
                 },
-                obsidian::store::metric_store::Sample {
+                aniani::store::metric_store::Sample {
                     timestamp_ms: base_ms + 120_000,
                     value: 30.0,
                 },
@@ -743,7 +743,7 @@ async fn test_promql_delta() {
 #[tokio::test]
 async fn test_promql_deriv() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let base_ms = 1_700_000_000_000i64;
 
@@ -753,15 +753,15 @@ async fn test_promql_deriv() {
             "linear_gauge",
             vec![("host".into(), "a".into())],
             vec![
-                obsidian::store::metric_store::Sample {
+                aniani::store::metric_store::Sample {
                     timestamp_ms: base_ms,
                     value: 0.0,
                 },
-                obsidian::store::metric_store::Sample {
+                aniani::store::metric_store::Sample {
                     timestamp_ms: base_ms + 60_000,
                     value: 60.0,
                 },
-                obsidian::store::metric_store::Sample {
+                aniani::store::metric_store::Sample {
                     timestamp_ms: base_ms + 120_000,
                     value: 120.0,
                 },
@@ -796,7 +796,7 @@ async fn test_promql_deriv() {
 #[tokio::test]
 async fn test_promql_sort() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -810,7 +810,7 @@ async fn test_promql_sort() {
             store.ingest_samples(
                 "sort_test",
                 vec![("instance".into(), format!("node-{}", i))],
-                vec![obsidian::store::metric_store::Sample {
+                vec![aniani::store::metric_store::Sample {
                     timestamp_ms: now_ms,
                     value: *val,
                 }],
@@ -839,7 +839,7 @@ async fn test_promql_sort() {
 #[tokio::test]
 async fn test_promql_sort_desc() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -853,7 +853,7 @@ async fn test_promql_sort_desc() {
             store.ingest_samples(
                 "sortdesc_test",
                 vec![("instance".into(), format!("node-{}", i))],
-                vec![obsidian::store::metric_store::Sample {
+                vec![aniani::store::metric_store::Sample {
                     timestamp_ms: now_ms,
                     value: *val,
                 }],
@@ -886,7 +886,7 @@ async fn test_promql_sort_desc() {
 #[tokio::test]
 async fn test_promql_clamp() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -899,7 +899,7 @@ async fn test_promql_clamp() {
         store.ingest_samples(
             "clamp_test",
             vec![("host".into(), "a".into())],
-            vec![obsidian::store::metric_store::Sample {
+            vec![aniani::store::metric_store::Sample {
                 timestamp_ms: now_ms,
                 value: 150.0,
             }],
@@ -919,7 +919,7 @@ async fn test_promql_clamp() {
 #[tokio::test]
 async fn test_promql_clamp_min() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -932,7 +932,7 @@ async fn test_promql_clamp_min() {
         store.ingest_samples(
             "clampmin_test",
             vec![("host".into(), "a".into())],
-            vec![obsidian::store::metric_store::Sample {
+            vec![aniani::store::metric_store::Sample {
                 timestamp_ms: now_ms,
                 value: -5.0,
             }],
@@ -952,7 +952,7 @@ async fn test_promql_clamp_min() {
 #[tokio::test]
 async fn test_promql_clamp_max() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -965,7 +965,7 @@ async fn test_promql_clamp_max() {
         store.ingest_samples(
             "clampmax_test",
             vec![("host".into(), "a".into())],
-            vec![obsidian::store::metric_store::Sample {
+            vec![aniani::store::metric_store::Sample {
                 timestamp_ms: now_ms,
                 value: 200.0,
             }],
@@ -993,7 +993,7 @@ async fn test_promql_clamp_max() {
 #[tokio::test]
 async fn test_promql_time() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let eval_time_s: i64 = 1_700_000_000;
     let json = promql_instant(&app, "time()", eval_time_s).await;
@@ -1017,7 +1017,7 @@ async fn test_promql_time() {
 #[tokio::test]
 async fn test_promql_vector() {
     let state = make_state();
-    let app = obsidian::server::build_router(state);
+    let app = aniani::server::build_router(state);
 
     let json = promql_instant(&app, "vector(42)", 1_700_000_000).await;
 
@@ -1039,7 +1039,7 @@ async fn test_promql_vector() {
 #[tokio::test]
 async fn test_promql_scalar() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1052,7 +1052,7 @@ async fn test_promql_scalar() {
         store.ingest_samples(
             "scalar_src",
             vec![("host".into(), "a".into())],
-            vec![obsidian::store::metric_store::Sample {
+            vec![aniani::store::metric_store::Sample {
                 timestamp_ms: now_ms,
                 value: 99.0,
             }],
@@ -1093,7 +1093,7 @@ async fn test_promql_scalar() {
 #[tokio::test]
 async fn test_traceql_avg_duration_aggregate() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     // Trace 1: two spans, avg duration = (100ms + 200ms) / 2 = 150ms
     let tid1: [u8; 16] = [0x01; 16];
@@ -1165,7 +1165,7 @@ async fn test_traceql_avg_duration_aggregate() {
 #[tokio::test]
 async fn test_traceql_max_duration_aggregate() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     // Trace 1: max span duration = 200ms
     let tid1: [u8; 16] = [0x11; 16];
@@ -1231,7 +1231,7 @@ async fn test_traceql_max_duration_aggregate() {
 #[tokio::test]
 async fn test_traceql_min_duration_aggregate() {
     let state = make_state();
-    let app = obsidian::server::build_router(state.clone());
+    let app = aniani::server::build_router(state.clone());
 
     // Trace 1: min span duration = 10ms
     let tid1: [u8; 16] = [0x31; 16];

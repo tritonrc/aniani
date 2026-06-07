@@ -18,15 +18,15 @@ use std::sync::Arc;
 use std::time::Instant;
 use tower::ServiceExt;
 
-pub fn make_state() -> obsidian::store::SharedState {
-    Arc::new(obsidian::store::AppState {
-        log_store: RwLock::new(obsidian::store::LogStore::new()),
-        metric_store: RwLock::new(obsidian::store::MetricStore::new()),
-        trace_store: RwLock::new(obsidian::store::TraceStore::new()),
-        config: obsidian::config::Config {
+pub fn make_state() -> aniani::store::SharedState {
+    Arc::new(aniani::store::AppState {
+        log_store: RwLock::new(aniani::store::LogStore::new()),
+        metric_store: RwLock::new(aniani::store::MetricStore::new()),
+        trace_store: RwLock::new(aniani::store::TraceStore::new()),
+        config: aniani::config::Config {
             port: 0,
             bind_address: "127.0.0.1".into(),
-            snapshot_dir: "/tmp/obsidian-test".into(),
+            snapshot_dir: "/tmp/aniani-test".into(),
             snapshot_interval: 0,
             max_log_entries: 100000,
             max_series: 10000,
