@@ -1,4 +1,6 @@
 /target
+/dist/
+libnull.rlib
 .aniani/
 *.snap
 *.snap.tmp

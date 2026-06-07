@@ -157,7 +157,7 @@ fn eval_span_selector(
     }
 
     // Sort by trace_id for deterministic output
-    results.sort_by(|a, b| a.trace_id.cmp(&b.trace_id));
+    results.sort_by_key(|a| a.trace_id);
     results
 }
 

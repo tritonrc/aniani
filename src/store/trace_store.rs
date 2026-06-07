@@ -268,7 +268,7 @@ impl TraceStore {
             .keys()
             .filter_map(|tid| self.trace_result(tid))
             .collect();
-        results.sort_by(|a, b| b.start_time_ns.cmp(&a.start_time_ns));
+        results.sort_by_key(|b| std::cmp::Reverse(b.start_time_ns));
         results.truncate(limit);
         results
     }

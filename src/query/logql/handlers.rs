@@ -247,7 +247,7 @@ fn format_logql_result(result: LogQLResult, limit: usize) -> Value {
                         sr.entries.drain(..).map(move |(ts, line)| (idx, ts, line))
                     })
                     .collect();
-                all.sort_by(|a, b| b.1.cmp(&a.1)); // newest first
+                all.sort_by_key(|b| std::cmp::Reverse(b.1)); // newest first
                 all.truncate(limit);
                 // Put entries back into their streams
                 for (idx, ts, line) in all {
