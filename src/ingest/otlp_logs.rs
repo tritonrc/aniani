@@ -11,7 +11,7 @@ use opentelemetry_proto::tonic::common::v1::any_value;
 use prost::Message;
 
 use super::label::{extract_resource_labels, promote_service_name};
-use super::{decode_body, is_json_content_type};
+use super::{decode_body, is_json_content_type, u64_to_i64_saturating};
 use crate::store::SharedState;
 use crate::store::log_store::LogEntry;
 
@@ -70,12 +70,9 @@ pub async fn logs_handler(
                 };
 
                 let timestamp_ns = if log_record.time_unix_nano == 0 {
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_nanos() as i64
+                    current_time_ns()
                 } else {
-                    log_record.time_unix_nano as i64
+                    u64_to_i64_saturating(log_record.time_unix_nano)
                 };
 
                 let entry = LogEntry { timestamp_ns, line };
@@ -94,6 +91,18 @@ pub async fn logs_handler(
 
     tracing::debug!(entries = entry_count, "ingested OTLP logs");
     StatusCode::NO_CONTENT
+}
+
+fn current_time_ns() -> i64 {
+    let ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    if ns > i64::MAX as u128 {
+        i64::MAX
+    } else {
+        ns as i64
+    }
 }
 
 /// Map OTLP severity number to a human-readable level string.

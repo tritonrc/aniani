@@ -26,10 +26,15 @@ pub struct DiagnoseParams {
 
 /// Return the current wall-clock time in nanoseconds since the Unix epoch.
 fn now_ns() -> i64 {
-    std::time::SystemTime::now()
+    let ns = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_nanos() as i64
+        .as_nanos();
+    if ns > i64::MAX as u128 {
+        i64::MAX
+    } else {
+        ns as i64
+    }
 }
 
 /// One hour in nanoseconds — the default lookback window for log scans.

@@ -40,10 +40,7 @@ pub async fn summary(
         }
     };
 
-    let now_ns = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as i64;
+    let now_ns = now_ns();
     let lookback_start = now_ns.saturating_sub(ONE_HOUR_NS);
 
     let logs = summarize_logs(&state, &service, lookback_start, now_ns);
@@ -62,6 +59,18 @@ pub async fn summary(
             }
         })),
     )
+}
+
+fn now_ns() -> i64 {
+    let ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    if ns > i64::MAX as u128 {
+        i64::MAX
+    } else {
+        ns as i64
+    }
 }
 
 fn summarize_logs(

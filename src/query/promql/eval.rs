@@ -19,10 +19,26 @@ use crate::store::{LabelMatchOp, LabelMatcher};
 /// `Neg` offsets shift forward (negative ms to subtract).
 fn offset_to_ms(offset: &Option<Offset>) -> i64 {
     match offset {
-        Some(Offset::Pos(dur)) => dur.as_millis() as i64,
-        Some(Offset::Neg(dur)) => -(dur.as_millis() as i64),
+        Some(Offset::Pos(dur)) => duration_to_i64_ms(dur),
+        Some(Offset::Neg(dur)) => duration_to_i64_ms(dur).saturating_neg(),
         None => 0,
     }
+}
+
+fn duration_to_i64_ms(duration: &std::time::Duration) -> i64 {
+    let ms = duration.as_millis();
+    if ms > i64::MAX as u128 {
+        i64::MAX
+    } else {
+        ms as i64
+    }
+}
+
+fn advance_time(current: i64, step: i64) -> Option<i64> {
+    if step <= 0 {
+        return None;
+    }
+    current.checked_add(step)
 }
 
 /// Convert an optional `AtModifier` to a fixed evaluation timestamp in milliseconds.
@@ -33,11 +49,10 @@ fn at_to_ms(at: &Option<AtModifier>, start_ms: i64, end_ms: i64) -> Option<i64> 
         Some(AtModifier::Start) => Some(start_ms),
         Some(AtModifier::End) => Some(end_ms),
         Some(AtModifier::At(time)) => {
-            let ms = time
+            let duration = time
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as i64;
-            Some(ms)
+                .unwrap_or_default();
+            Some(duration_to_i64_ms(&duration))
         }
         None => None,
     }
@@ -175,12 +190,12 @@ fn eval_vector_selector(
         let lookback_ms = 5 * 60 * 1000; // 5-minute lookback
         let forward_buffer_ms = 1000; // 1s forward tolerance for OTLP/PromQL timestamp rounding
         let eval_time = at_ms.unwrap_or(end_ms);
-        let effective_end = eval_time - offset_ms;
+        let effective_end = eval_time.saturating_sub(offset_ms);
         for sid in &series_ids {
             let samples = store.get_samples(
                 *sid,
-                effective_end - lookback_ms,
-                effective_end + forward_buffer_ms,
+                effective_end.saturating_sub(lookback_ms),
+                effective_end.saturating_add(forward_buffer_ms),
             );
             if let Some(last) = samples.last() {
                 let labels = store.get_series_labels(*sid).unwrap_or_default();
@@ -200,12 +215,16 @@ fn eval_vector_selector(
             let mut t = start_ms;
             while t <= end_ms {
                 let eval_time = at_ms.unwrap_or(t);
-                let effective_t = eval_time - offset_ms;
-                let samples = store.get_samples(*sid, effective_t - lookback_ms, effective_t);
+                let effective_t = eval_time.saturating_sub(offset_ms);
+                let samples =
+                    store.get_samples(*sid, effective_t.saturating_sub(lookback_ms), effective_t);
                 if let Some(last) = samples.last() {
                     series_samples.push((t, last.value));
                 }
-                t += step_ms;
+                let Some(next_t) = advance_time(t, step_ms) else {
+                    break;
+                };
+                t = next_t;
             }
             if !series_samples.is_empty() {
                 results.push(SeriesResult {
@@ -237,15 +256,16 @@ fn eval_matrix_selector(
         });
     }
     let series_ids = store.select_series(&matchers);
-    let range_ms = ms.range.as_millis() as i64;
+    let range_ms = duration_to_i64_ms(&ms.range);
     let offset_ms = offset_to_ms(&vs.offset);
     let eval_time = at_to_ms(&vs.at, _start_ms, end_ms).unwrap_or(end_ms);
-    let effective_end = eval_time - offset_ms;
+    let effective_end = eval_time.saturating_sub(offset_ms);
 
     let mut results = Vec::new();
     for sid in &series_ids {
         let labels = store.get_series_labels(*sid).unwrap_or_default();
-        let samples = store.get_samples(*sid, effective_end - range_ms, effective_end);
+        let samples =
+            store.get_samples(*sid, effective_end.saturating_sub(range_ms), effective_end);
         let sample_tuples: Vec<(i64, f64)> =
             samples.iter().map(|s| (s.timestamp_ms, s.value)).collect();
         if !sample_tuples.is_empty() {
@@ -575,7 +595,7 @@ fn eval_rate_like(
 ) -> Result<PromQLResult, PromQLError> {
     // arg should be a MatrixSelector
     let (vs, range_ms) = match arg {
-        Expr::MatrixSelector(ms) => (&ms.vs, ms.range.as_millis() as i64),
+        Expr::MatrixSelector(ms) => (&ms.vs, duration_to_i64_ms(&ms.range)),
         _ => {
             return Err(PromQLError::Eval(
                 "rate/increase requires matrix selector".into(),
@@ -599,10 +619,11 @@ fn eval_rate_like(
     let mut results = Vec::new();
 
     if instant || step_ms == 0 {
-        let effective_end = end_ms - offset_ms;
+        let effective_end = end_ms.saturating_sub(offset_ms);
         for sid in &series_ids {
             let labels = store.get_series_labels(*sid).unwrap_or_default();
-            let samples = store.get_samples(*sid, effective_end - range_ms, effective_end);
+            let samples =
+                store.get_samples(*sid, effective_end.saturating_sub(range_ms), effective_end);
             let value = compute_rate_like(func_name, samples, range_ms);
             if let Some(v) = value {
                 results.push(SeriesResult {
@@ -618,12 +639,16 @@ fn eval_rate_like(
             let mut series_samples = Vec::new();
             let mut t = start_ms;
             while t <= end_ms {
-                let effective_t = t - offset_ms;
-                let samples = store.get_samples(*sid, effective_t - range_ms, effective_t);
+                let effective_t = t.saturating_sub(offset_ms);
+                let samples =
+                    store.get_samples(*sid, effective_t.saturating_sub(range_ms), effective_t);
                 if let Some(v) = compute_rate_like(func_name, samples, range_ms) {
                     series_samples.push((t, v));
                 }
-                t += step_ms;
+                let Some(next_t) = advance_time(t, step_ms) else {
+                    break;
+                };
+                t = next_t;
             }
             if !series_samples.is_empty() {
                 results.push(SeriesResult {

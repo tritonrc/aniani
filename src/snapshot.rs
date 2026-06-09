@@ -1,6 +1,7 @@
 //! Snapshot manager: serialize/deserialize stores to bincode.
 
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::Result;
@@ -50,7 +51,17 @@ pub fn save_snapshot_owned(
     let tmp_path = dir.join("aniani.snap.tmp");
     let final_path = dir.join("aniani.snap");
 
-    fs::write(&tmp_path, &bytes)?;
+    match fs::remove_file(&tmp_path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+    let mut tmp_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp_path)?;
+    tmp_file.write_all(&bytes)?;
+    tmp_file.sync_all()?;
     fs::rename(&tmp_path, &final_path)?;
 
     tracing::info!(
@@ -138,5 +149,25 @@ mod tests {
 
         assert_eq!(restored_logs.total_entries, 1);
         assert_eq!(restored_metrics.total_samples, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_snapshot_temp_symlink_does_not_overwrite_target() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().unwrap();
+        let target_path = dir.path().join("target");
+        fs::write(&target_path, b"do not overwrite").unwrap();
+        symlink(&target_path, dir.path().join("aniani.snap.tmp")).unwrap();
+
+        let log_store = LogStore::new();
+        let metric_store = MetricStore::new();
+        let trace_store = TraceStore::new();
+
+        save_snapshot(&log_store, &metric_store, &trace_store, dir.path()).unwrap();
+
+        assert_eq!(fs::read(&target_path).unwrap(), b"do not overwrite");
+        assert!(dir.path().join("aniani.snap").exists());
     }
 }

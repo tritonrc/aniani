@@ -91,8 +91,9 @@ fn apply_pipeline_stage(results: Vec<TraceResult>, stage: &PipelineStage) -> Vec
                 if r.matched_spans.is_empty() {
                     return false;
                 }
-                let total: i64 = r.matched_spans.iter().map(|s| s.duration_ns).sum();
-                let avg = total / r.matched_spans.len() as i64;
+                let total: i128 = r.matched_spans.iter().map(|s| s.duration_ns as i128).sum();
+                let avg_i128 = total / r.matched_spans.len() as i128;
+                let avg = avg_i128.clamp(i64::MIN as i128, i64::MAX as i128) as i64;
                 compare_duration_ns(avg, op, *value_ns)
             })
             .collect(),

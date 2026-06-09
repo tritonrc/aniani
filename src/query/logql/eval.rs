@@ -86,14 +86,7 @@ pub fn evaluate_logql(
             inner,
             range,
         } => {
-            let step = step_ns.unwrap_or_else(|| {
-                let ns = range.as_nanos();
-                if ns > i64::MAX as u128 {
-                    i64::MAX
-                } else {
-                    ns as i64
-                }
-            });
+            let step = step_ns.unwrap_or_else(|| duration_to_i64_ns(range));
             evaluate_metric_query(function, inner, *range, store, start_ns, end_ns, step)
         }
     }
@@ -108,7 +101,7 @@ fn evaluate_metric_query(
     end_ns: i64,
     step_ns: i64,
 ) -> LogQLResult {
-    let range_ns = range.as_nanos() as i64;
+    let range_ns = duration_to_i64_ns(&range);
 
     // Get the selector and optional stages
     let (matchers, stages) = extract_selector_and_stages(inner);
@@ -123,7 +116,7 @@ fn evaluate_metric_query(
 
         let mut t = start_ns;
         while t <= end_ns {
-            let window_start = t - range_ns;
+            let window_start = t.saturating_sub(range_ns);
             let window_end = t;
             let entries = store.get_entries(*sid, window_start, window_end);
 
@@ -163,7 +156,10 @@ fn evaluate_metric_query(
                         .filter_map(|e| e.line.trim().parse::<f64>().ok())
                         .collect();
                     if vals.is_empty() {
-                        t += step_ns;
+                        let Some(next_t) = advance_time(t, step_ns) else {
+                            break;
+                        };
+                        t = next_t;
                         continue;
                     }
                     vals.into_iter().fold(f64::INFINITY, f64::min)
@@ -174,7 +170,10 @@ fn evaluate_metric_query(
                         .filter_map(|e| e.line.trim().parse::<f64>().ok())
                         .collect();
                     if vals.is_empty() {
-                        t += step_ns;
+                        let Some(next_t) = advance_time(t, step_ns) else {
+                            break;
+                        };
+                        t = next_t;
                         continue;
                     }
                     vals.into_iter().fold(f64::NEG_INFINITY, f64::max)
@@ -182,7 +181,10 @@ fn evaluate_metric_query(
             };
 
             samples.push((t, value));
-            t += step_ns;
+            let Some(next_t) = advance_time(t, step_ns) else {
+                break;
+            };
+            t = next_t;
         }
 
         if !samples.is_empty() {
@@ -191,6 +193,22 @@ fn evaluate_metric_query(
     }
 
     LogQLResult::Matrix(results)
+}
+
+fn duration_to_i64_ns(duration: &Duration) -> i64 {
+    let ns = duration.as_nanos();
+    if ns > i64::MAX as u128 {
+        i64::MAX
+    } else {
+        ns as i64
+    }
+}
+
+fn advance_time(current: i64, step: i64) -> Option<i64> {
+    if step <= 0 {
+        return None;
+    }
+    current.checked_add(step)
 }
 
 fn extract_selector_and_stages(

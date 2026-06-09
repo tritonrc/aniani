@@ -14,7 +14,7 @@ use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 
 use super::label::extract_resource_labels;
-use super::{decode_body, is_json_content_type};
+use super::{decode_body, is_json_content_type, u64_to_i64_saturating};
 use crate::store::SharedState;
 use crate::store::trace_store::{AttributeValue, Span, SpanStatus};
 
@@ -137,8 +137,9 @@ pub async fn traces_handler(
                     None => SpanStatus::Unset,
                 };
 
-                let duration_ns =
-                    otlp_span.end_time_unix_nano as i64 - otlp_span.start_time_unix_nano as i64;
+                let start_time_ns = u64_to_i64_saturating(otlp_span.start_time_unix_nano);
+                let end_time_ns = u64_to_i64_saturating(otlp_span.end_time_unix_nano);
+                let duration_ns = end_time_ns.saturating_sub(start_time_ns);
 
                 let mut attributes = resource_attrs.clone();
 
@@ -159,7 +160,7 @@ pub async fn traces_handler(
                     parent_span_id,
                     name: otlp_span.name.clone(),
                     service_name: service_name.clone(),
-                    start_time_ns: otlp_span.start_time_unix_nano as i64,
+                    start_time_ns,
                     duration_ns,
                     status,
                     attributes,

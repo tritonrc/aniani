@@ -12,6 +12,9 @@ use serde::Deserialize;
 use crate::store::SharedState;
 use crate::store::log_store::LogEntry;
 
+const MAX_LOKI_LABELS_PER_STREAM: usize = 128;
+const MAX_LOKI_STREAMS_PER_REQUEST: usize = 10_000;
+
 /// Loki push JSON format.
 #[derive(Debug, Deserialize)]
 pub struct LokiPushRequest {
@@ -90,6 +93,10 @@ pub async fn push_handler(
         }
     } else {
         // JSON path
+        if let Err(e) = super::ensure_body_size(&body) {
+            tracing::warn!("Loki push body rejected: {}", e);
+            return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+        }
         match serde_json::from_slice::<LokiPushRequest>(&body) {
             Ok(r) => r,
             Err(e) => {
@@ -98,6 +105,29 @@ pub async fn push_handler(
             }
         }
     };
+
+    if request.streams.len() > MAX_LOKI_STREAMS_PER_REQUEST {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(serde_json::json!({
+                "error": format!("too many Loki streams: maximum is {}", MAX_LOKI_STREAMS_PER_REQUEST)
+            })),
+        )
+            .into_response();
+    }
+    if request
+        .streams
+        .iter()
+        .any(|stream| stream.stream.len() > MAX_LOKI_LABELS_PER_STREAM)
+    {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(serde_json::json!({
+                "error": format!("too many labels in Loki stream: maximum is {}", MAX_LOKI_LABELS_PER_STREAM)
+            })),
+        )
+            .into_response();
+    }
 
     let (streams, entries) = ingest_loki_push(&state, request);
     Json(serde_json::json!({

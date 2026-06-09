@@ -135,7 +135,14 @@ async fn query_range_inner(
         None => now_ms,
     };
     let step_ms = match params.step.as_deref() {
-        Some(s) => match crate::config::parse_duration(s).map(|d| d.as_millis() as i64) {
+        Some(s) => match crate::config::parse_duration(s).map(|d| {
+            let ms = d.as_millis();
+            if ms > i64::MAX as u128 {
+                i64::MAX
+            } else {
+                ms as i64
+            }
+        }) {
             Some(ms) => ms,
             None => {
                 return (
@@ -412,10 +419,15 @@ fn format_range_series(sr: SeriesResult) -> Value {
 }
 
 fn now_ms() -> i64 {
-    std::time::SystemTime::now()
+    let ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() as i64
+        .as_millis();
+    if ms > i64::MAX as u128 {
+        i64::MAX
+    } else {
+        ms as i64
+    }
 }
 
 fn parse_timestamp_ms(s: &str) -> Option<i64> {
@@ -425,9 +437,20 @@ fn parse_timestamp_ms(s: &str) -> Option<i64> {
     }
     // Try as float seconds (Prometheus convention: "1700000000.5")
     if let Ok(secs) = s.parse::<f64>() {
-        return Some((secs * 1000.0) as i64);
+        return float_seconds_to_ms(secs);
     }
     None
+}
+
+fn float_seconds_to_ms(secs: f64) -> Option<i64> {
+    const MS_PER_SEC: f64 = 1000.0;
+    if !secs.is_finite()
+        || secs > i64::MAX as f64 / MS_PER_SEC
+        || secs < i64::MIN as f64 / MS_PER_SEC
+    {
+        return None;
+    }
+    Some((secs * MS_PER_SEC) as i64)
 }
 
 /// Classify an integer timestamp to milliseconds based on its magnitude.
@@ -448,6 +471,13 @@ mod tests {
     #[test]
     fn test_max_query_steps_constant() {
         assert_eq!(MAX_QUERY_STEPS, 11_000);
+    }
+
+    #[test]
+    fn test_parse_timestamp_rejects_non_finite_float() {
+        assert_eq!(parse_timestamp_ms("NaN"), None);
+        assert_eq!(parse_timestamp_ms("inf"), None);
+        assert_eq!(parse_timestamp_ms("1e300"), None);
     }
 
     #[test]

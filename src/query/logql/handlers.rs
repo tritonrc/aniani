@@ -17,6 +17,8 @@ const LOGQL_HINT: &str = "Example: {service=\"myapp\"} |= \"error\"";
 
 /// Maximum number of steps allowed in a range query. Matches Prometheus default of 11,000.
 const MAX_QUERY_STEPS: i64 = 11_000;
+const DEFAULT_ENTRY_LIMIT: usize = 1000;
+const MAX_ENTRY_LIMIT: usize = 10_000;
 
 #[derive(Debug, Deserialize)]
 pub struct QueryParams {
@@ -81,7 +83,7 @@ async fn query_inner(state: SharedState, params: QueryParams) -> (StatusCode, Js
 
     let store = state.log_store.read();
     let result = evaluate_logql(&expr, &store, start_ns, end_ns, None);
-    let limit = params.limit.unwrap_or(1000);
+    let limit = bounded_limit(params.limit);
 
     (StatusCode::OK, Json(format_logql_result(result, limit)))
 }
@@ -204,7 +206,7 @@ async fn query_range_inner(
 
     let store = state.log_store.read();
     let result = evaluate_logql(&expr, &store, start_ns, end_ns, step_ns);
-    let limit = params.limit.unwrap_or(1000);
+    let limit = bounded_limit(params.limit);
 
     (StatusCode::OK, Json(format_logql_result(result, limit)))
 }
@@ -319,10 +321,15 @@ fn format_logql_result(result: LogQLResult, limit: usize) -> Value {
 }
 
 fn now_ns() -> i64 {
-    std::time::SystemTime::now()
+    let ns = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_nanos() as i64
+        .as_nanos();
+    if ns > i64::MAX as u128 {
+        i64::MAX
+    } else {
+        ns as i64
+    }
 }
 
 fn parse_timestamp_ns(s: &str) -> Option<i64> {
@@ -332,9 +339,24 @@ fn parse_timestamp_ns(s: &str) -> Option<i64> {
     }
     // Try float seconds (e.g., "1700000000.5")
     if let Ok(secs) = s.parse::<f64>() {
-        return Some((secs * 1_000_000_000.0) as i64);
+        return float_seconds_to_ns(secs);
     }
     None
+}
+
+fn bounded_limit(limit: Option<usize>) -> usize {
+    limit.unwrap_or(DEFAULT_ENTRY_LIMIT).min(MAX_ENTRY_LIMIT)
+}
+
+fn float_seconds_to_ns(secs: f64) -> Option<i64> {
+    const NS_PER_SEC: f64 = 1_000_000_000.0;
+    if !secs.is_finite()
+        || secs > i64::MAX as f64 / NS_PER_SEC
+        || secs < i64::MIN as f64 / NS_PER_SEC
+    {
+        return None;
+    }
+    Some((secs * NS_PER_SEC) as i64)
 }
 
 fn classify_to_ns(n: i64) -> i64 {
@@ -394,6 +416,19 @@ mod tests {
     #[test]
     fn test_max_query_steps_constant() {
         assert_eq!(MAX_QUERY_STEPS, 11_000);
+    }
+
+    #[test]
+    fn test_parse_timestamp_rejects_non_finite_float() {
+        assert_eq!(parse_timestamp_ns("NaN"), None);
+        assert_eq!(parse_timestamp_ns("inf"), None);
+        assert_eq!(parse_timestamp_ns("1e300"), None);
+    }
+
+    #[test]
+    fn test_bounded_limit_caps_untrusted_limit() {
+        assert_eq!(bounded_limit(None), DEFAULT_ENTRY_LIMIT);
+        assert_eq!(bounded_limit(Some(MAX_ENTRY_LIMIT + 1)), MAX_ENTRY_LIMIT);
     }
 
     #[test]

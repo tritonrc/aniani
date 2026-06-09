@@ -201,11 +201,9 @@ fn all_ids_posting_list(mut ids: Vec<u64>) -> PostingList {
 /// Run eviction on all stores based on config.
 pub fn run_eviction(state: &AppState) {
     let retention = state.config.retention_duration();
-    let now_ns = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as i64;
-    let cutoff_ns = now_ns - retention.as_nanos() as i64;
+    let now_ns = system_time_ns();
+    let retention_ns = duration_to_i64_ns(retention);
+    let cutoff_ns = now_ns.saturating_sub(retention_ns);
     let cutoff_ms = cutoff_ns / 1_000_000;
 
     // Evict by time and max count
@@ -223,5 +221,26 @@ pub fn run_eviction(state: &AppState) {
         let mut traces = state.trace_store.write();
         traces.evict_before(cutoff_ns);
         traces.evict_to_max(state.config.max_spans);
+    }
+}
+
+fn system_time_ns() -> i64 {
+    let ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    if ns > i64::MAX as u128 {
+        i64::MAX
+    } else {
+        ns as i64
+    }
+}
+
+fn duration_to_i64_ns(duration: std::time::Duration) -> i64 {
+    let ns = duration.as_nanos();
+    if ns > i64::MAX as u128 {
+        i64::MAX
+    } else {
+        ns as i64
     }
 }
