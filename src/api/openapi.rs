@@ -516,7 +516,7 @@ fn spec() -> Value {
         json!({
             "title": "Aniani",
             "description": "Lightweight ephemeral observability engine exposing LogQL, PromQL, and TraceQL query surfaces over in-memory stores.",
-            "version": "0.7.1"
+            "version": "0.7.2"
         }),
     );
     doc.insert("paths".into(), Value::Object(paths));
