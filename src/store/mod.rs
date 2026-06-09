@@ -18,7 +18,7 @@ use smallvec::SmallVec;
 use crate::config::Config;
 pub use log_store::LogStore;
 pub use metric_store::MetricStore;
-use posting_list::{PostingList, intersect, union};
+use posting_list::{PostingList, difference, intersect, union};
 pub use trace_store::TraceStore;
 
 /// Shared application state accessible by all handlers.
@@ -134,14 +134,11 @@ where
             }
             LabelMatchOp::Neq => {
                 let value_spur = interner.get(&matcher.value);
-                let mut result = all_ids_posting_list(all_ids());
-                if let Some(vs) = value_spur
-                    && let Some(exclude) = label_index.get(&(name_spur, vs))
-                {
-                    for &id in exclude.ids() {
-                        result.remove(id);
-                    }
-                }
+                let all = all_ids_posting_list(all_ids());
+                let result = value_spur
+                    .and_then(|vs| label_index.get(&(name_spur, vs)))
+                    .map(|exclude| difference(&all, exclude))
+                    .unwrap_or(all);
                 positive_lists.push(result);
             }
             LabelMatchOp::Regex => {
@@ -167,20 +164,19 @@ where
                     Ok(r) => r,
                     Err(_) => return Vec::new(),
                 };
-                let mut result = all_ids_posting_list(all_ids());
+                let all = all_ids_posting_list(all_ids());
+                let mut excluded = PostingList::new();
                 if let Some(values) = label_values.get(&name_spur) {
                     for &vs in values {
                         let val_str = interner.resolve(&vs);
                         if re.is_match(val_str)
                             && let Some(exclude) = label_index.get(&(name_spur, vs))
                         {
-                            for &id in exclude.ids() {
-                                result.remove(id);
-                            }
+                            excluded = union(&excluded, exclude);
                         }
                     }
                 }
-                positive_lists.push(result);
+                positive_lists.push(difference(&all, &excluded));
             }
         }
     }
@@ -189,13 +185,8 @@ where
     intersect(&refs)
 }
 
-fn all_ids_posting_list(mut ids: Vec<u64>) -> PostingList {
-    ids.sort_unstable();
-    let mut posting_list = PostingList::new();
-    for id in ids {
-        posting_list.insert(id);
-    }
-    posting_list
+fn all_ids_posting_list(ids: Vec<u64>) -> PostingList {
+    PostingList::from_ids(ids)
 }
 
 /// Run eviction on all stores based on config.

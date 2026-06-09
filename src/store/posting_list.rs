@@ -17,6 +17,13 @@ impl PostingList {
         Self { ids: Vec::new() }
     }
 
+    /// Create a posting list from IDs that may contain duplicates.
+    pub fn from_ids(mut ids: Vec<u64>) -> Self {
+        ids.sort_unstable();
+        ids.dedup();
+        Self { ids }
+    }
+
     /// Insert an ID, maintaining sorted order. No-op if already present.
     pub fn insert(&mut self, id: u64) {
         match self.ids.binary_search(&id) {
@@ -55,6 +62,27 @@ impl PostingList {
     pub fn ids(&self) -> &[u64] {
         &self.ids
     }
+}
+
+/// Return IDs present in `a` and absent from `b`.
+pub fn difference(a: &PostingList, b: &PostingList) -> PostingList {
+    let mut ids = Vec::with_capacity(a.len());
+    let (mut i, mut j) = (0, 0);
+    while i < a.ids.len() && j < b.ids.len() {
+        match a.ids[i].cmp(&b.ids[j]) {
+            std::cmp::Ordering::Less => {
+                ids.push(a.ids[i]);
+                i += 1;
+            }
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    ids.extend_from_slice(&a.ids[i..]);
+    PostingList { ids }
 }
 
 /// Intersect multiple posting lists, starting with the smallest.
@@ -138,6 +166,12 @@ mod tests {
         pl.insert(1); // duplicate
         assert_eq!(pl.ids(), &[1, 3, 5]);
         assert_eq!(pl.len(), 3);
+    }
+
+    #[test]
+    fn test_from_ids_sorts_and_deduplicates() {
+        let pl = PostingList::from_ids(vec![3, 1, 3, 2, 1]);
+        assert_eq!(pl.ids(), &[1, 2, 3]);
     }
 
     #[test]
@@ -228,6 +262,14 @@ mod tests {
         let a = PostingList::new();
         let b = PostingList::new();
         assert!(union(&a, &b).is_empty());
+    }
+
+    #[test]
+    fn test_difference() {
+        let a = PostingList::from_ids(vec![1, 2, 3, 5, 8]);
+        let b = PostingList::from_ids(vec![2, 4, 8]);
+        let result = difference(&a, &b);
+        assert_eq!(result.ids(), &[1, 3, 5]);
     }
 
     #[test]

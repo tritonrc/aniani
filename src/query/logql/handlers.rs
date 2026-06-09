@@ -8,7 +8,7 @@ use axum::response::IntoResponse;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::eval::{LogQLResult, evaluate_logql};
+use super::eval::{LogQLResult, evaluate_logql_limited};
 use super::parser::parse_logql;
 use crate::store::SharedState;
 
@@ -81,9 +81,9 @@ async fn query_inner(state: SharedState, params: QueryParams) -> (StatusCode, Js
         None => (0, now_ns), // No time specified: search all data
     };
 
-    let store = state.log_store.read();
-    let result = evaluate_logql(&expr, &store, start_ns, end_ns, None);
     let limit = bounded_limit(params.limit);
+    let store = state.log_store.read();
+    let result = evaluate_logql_limited(&expr, &store, start_ns, end_ns, None, Some(limit));
 
     (StatusCode::OK, Json(format_logql_result(result, limit)))
 }
@@ -204,9 +204,9 @@ async fn query_range_inner(
         }
     }
 
-    let store = state.log_store.read();
-    let result = evaluate_logql(&expr, &store, start_ns, end_ns, step_ns);
     let limit = bounded_limit(params.limit);
+    let store = state.log_store.read();
+    let result = evaluate_logql_limited(&expr, &store, start_ns, end_ns, step_ns, Some(limit));
 
     (StatusCode::OK, Json(format_logql_result(result, limit)))
 }
