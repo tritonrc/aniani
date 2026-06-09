@@ -4,6 +4,8 @@ Getting observability into a development harness is usually expensive: you need 
 
 Aniani collapses it to a single binary. One process, one port, three query surfaces (LogQL, PromQL, TraceQL) over in-memory stores. Services point their OTLP exporter at it directly — no collector, no sidecar, no config file. Drop it into your worktree boot script and it's gone when the worktree is.
 
+The name comes from Hawaiian: *aniani* means "mirror; clear, transparent glass." The intent is the same here — reflect a running development environment back clearly, without turning observability into another service stack to operate.
+
 ---
 
 ## The Worktree Model
