@@ -245,7 +245,7 @@ impl TraceStore {
         let start = spans.iter().map(|s| s.start_time_ns).min().unwrap_or(0);
         let end = spans
             .iter()
-            .map(|s| s.start_time_ns + s.duration_ns)
+            .map(|s| s.start_time_ns.saturating_add(s.duration_ns))
             .max()
             .unwrap_or(0);
 
@@ -254,7 +254,7 @@ impl TraceStore {
             root_service_name: self.interner.resolve(&root.service_name).to_string(),
             root_span_name: self.interner.resolve(&root.name).to_string(),
             start_time_ns: start,
-            duration_ns: end - start,
+            duration_ns: end.saturating_sub(start),
             span_count: spans.len(),
         })
     }

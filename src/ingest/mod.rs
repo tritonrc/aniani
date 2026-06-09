@@ -32,6 +32,14 @@ pub enum IngestError {
     PayloadTooLarge,
 }
 
+/// Reject an uncompressed request body that exceeds the ingestion size limit.
+pub fn ensure_body_size(body: &[u8]) -> Result<(), IngestError> {
+    if body.len() > MAX_DECOMPRESSED_SIZE {
+        return Err(IngestError::PayloadTooLarge);
+    }
+    Ok(())
+}
+
 /// Decode a request body, decompressing gzip if the `content-encoding` header indicates it.
 pub fn decode_body<'a>(headers: &HeaderMap, body: &'a Bytes) -> Result<Cow<'a, [u8]>, IngestError> {
     let is_gzip = headers
@@ -50,6 +58,7 @@ pub fn decode_body<'a>(headers: &HeaderMap, body: &'a Bytes) -> Result<Cow<'a, [
         }
         Ok(Cow::Owned(decompressed))
     } else {
+        ensure_body_size(body.as_ref())?;
         Ok(Cow::Borrowed(body.as_ref()))
     }
 }
@@ -65,6 +74,14 @@ pub fn decode_snappy_body(body: &[u8]) -> Result<Vec<u8>, IngestError> {
     let written = snap::raw::Decoder::new().decompress(body, &mut decompressed)?;
     decompressed.truncate(written);
     Ok(decompressed)
+}
+
+pub(crate) fn u64_to_i64_saturating(value: u64) -> i64 {
+    if value > i64::MAX as u64 {
+        i64::MAX
+    } else {
+        value as i64
+    }
 }
 
 /// Check if the Content-Type header indicates JSON encoding.
@@ -141,5 +158,18 @@ mod tests {
         let compressed = vec![0x81, 0x80, 0x80, 0x20];
         let err = decode_snappy_body(&compressed).expect_err("should reject >64MiB payload");
         assert!(matches!(err, IngestError::PayloadTooLarge));
+    }
+
+    #[test]
+    fn test_plain_body_rejects_large_payload() {
+        let body = vec![0u8; MAX_DECOMPRESSED_SIZE + 1];
+        let err = ensure_body_size(&body).expect_err("should reject >64MiB payload");
+        assert!(matches!(err, IngestError::PayloadTooLarge));
+    }
+
+    #[test]
+    fn test_u64_to_i64_saturating() {
+        assert_eq!(u64_to_i64_saturating(42), 42);
+        assert_eq!(u64_to_i64_saturating(u64::MAX), i64::MAX);
     }
 }

@@ -1,5 +1,7 @@
 //! LogQL evaluator against LogStore.
 
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::time::Duration;
 
 use rustc_hash::FxHashMap;
@@ -7,7 +9,7 @@ use rustc_hash::FxHashMap;
 use crate::store::log_store::LogStore;
 use crate::store::{LabelMatchOp, LabelMatcher};
 
-use super::parser::{LogQLExpr, MatchOp, MetricFunc, PipelineStage};
+use super::parser::{LogQLExpr, LogQLMatcher, MatchOp, MetricFunc, PipelineStage};
 
 /// Result of a LogQL evaluation.
 #[derive(Debug)]
@@ -40,60 +42,42 @@ pub fn evaluate_logql(
     end_ns: i64,
     step_ns: Option<i64>,
 ) -> LogQLResult {
+    evaluate_logql_limited(expr, store, start_ns, end_ns, step_ns, None)
+}
+
+/// Evaluate a LogQL expression with an optional global stream-entry limit.
+pub fn evaluate_logql_limited(
+    expr: &LogQLExpr,
+    store: &LogStore,
+    start_ns: i64,
+    end_ns: i64,
+    step_ns: Option<i64>,
+    stream_limit: Option<usize>,
+) -> LogQLResult {
     match expr {
         LogQLExpr::StreamSelector { matchers } => {
-            let lm = convert_matchers(matchers);
-            let stream_ids = store.query_streams(&lm);
-            let mut results = Vec::new();
-            for sid in stream_ids {
-                let entries = store.get_entries(sid, start_ns, end_ns);
-                if entries.is_empty() {
-                    continue;
-                }
-                let labels = store.get_stream_labels(sid).unwrap_or_default();
-                let entry_tuples: Vec<(i64, String)> = entries
-                    .iter()
-                    .map(|e| (e.timestamp_ns, e.line.clone()))
-                    .collect();
-                results.push(StreamResult {
-                    labels,
-                    entries: entry_tuples,
-                });
-            }
-            LogQLResult::Streams(results)
+            evaluate_stream_query(matchers, &[], store, start_ns, end_ns, stream_limit)
         }
         LogQLExpr::Pipeline {
             selector, stages, ..
         } => {
-            let inner = evaluate_logql(selector, store, start_ns, end_ns, step_ns);
-            match inner {
-                LogQLResult::Streams(streams) => {
-                    let filtered: Vec<StreamResult> = streams
-                        .into_iter()
-                        .map(|mut sr| {
-                            sr.entries.retain(|(_, line)| apply_stages(line, stages));
-                            sr
-                        })
-                        .filter(|sr| !sr.entries.is_empty())
-                        .collect();
-                    LogQLResult::Streams(filtered)
-                }
-                other => other,
-            }
+            let (matchers, mut all_stages) = extract_selector_and_stages(selector);
+            all_stages.extend(stages.clone());
+            evaluate_stream_query(
+                &matchers,
+                &all_stages,
+                store,
+                start_ns,
+                end_ns,
+                stream_limit,
+            )
         }
         LogQLExpr::MetricQuery {
             function,
             inner,
             range,
         } => {
-            let step = step_ns.unwrap_or_else(|| {
-                let ns = range.as_nanos();
-                if ns > i64::MAX as u128 {
-                    i64::MAX
-                } else {
-                    ns as i64
-                }
-            });
+            let step = step_ns.unwrap_or_else(|| duration_to_i64_ns(range));
             evaluate_metric_query(function, inner, *range, store, start_ns, end_ns, step)
         }
     }
@@ -108,7 +92,7 @@ fn evaluate_metric_query(
     end_ns: i64,
     step_ns: i64,
 ) -> LogQLResult {
-    let range_ns = range.as_nanos() as i64;
+    let range_ns = duration_to_i64_ns(&range);
 
     // Get the selector and optional stages
     let (matchers, stages) = extract_selector_and_stages(inner);
@@ -123,66 +107,73 @@ fn evaluate_metric_query(
 
         let mut t = start_ns;
         while t <= end_ns {
-            let window_start = t - range_ns;
+            let window_start = t.saturating_sub(range_ns);
             let window_end = t;
             let entries = store.get_entries(*sid, window_start, window_end);
 
-            let filtered: Vec<_> = entries
-                .iter()
-                .filter(|e| apply_stages(&e.line, &stages))
-                .collect();
+            let mut count = 0usize;
+            let mut byte_sum = 0usize;
+            let mut numeric_count = 0usize;
+            let mut numeric_sum = 0.0;
+            let mut numeric_min = f64::INFINITY;
+            let mut numeric_max = f64::NEG_INFINITY;
+
+            for entry in entries.iter().filter(|e| apply_stages(&e.line, &stages)) {
+                count += 1;
+                byte_sum += entry.line.len();
+                if let Ok(value) = entry.line.trim().parse::<f64>() {
+                    numeric_count += 1;
+                    numeric_sum += value;
+                    numeric_min = numeric_min.min(value);
+                    numeric_max = numeric_max.max(value);
+                }
+            }
 
             let value = match function {
-                MetricFunc::CountOverTime => filtered.len() as f64,
+                MetricFunc::CountOverTime => count as f64,
                 MetricFunc::Rate => {
                     if range_ns > 0 {
-                        filtered.len() as f64 / (range_ns as f64 / 1_000_000_000.0)
+                        count as f64 / (range_ns as f64 / 1_000_000_000.0)
                     } else {
                         0.0
                     }
                 }
-                MetricFunc::BytesOverTime => filtered.iter().map(|e| e.line.len() as f64).sum(),
-                MetricFunc::SumOverTime => filtered
-                    .iter()
-                    .filter_map(|e| e.line.trim().parse::<f64>().ok())
-                    .sum(),
+                MetricFunc::BytesOverTime => byte_sum as f64,
+                MetricFunc::SumOverTime => numeric_sum,
                 MetricFunc::AvgOverTime => {
-                    let values: Vec<f64> = filtered
-                        .iter()
-                        .filter_map(|e| e.line.trim().parse::<f64>().ok())
-                        .collect();
-                    if values.is_empty() {
+                    if numeric_count == 0 {
                         0.0
                     } else {
-                        values.iter().sum::<f64>() / values.len() as f64
+                        numeric_sum / numeric_count as f64
                     }
                 }
                 MetricFunc::MinOverTime => {
-                    let vals: Vec<f64> = filtered
-                        .iter()
-                        .filter_map(|e| e.line.trim().parse::<f64>().ok())
-                        .collect();
-                    if vals.is_empty() {
-                        t += step_ns;
+                    if numeric_count == 0 {
+                        let Some(next_t) = advance_time(t, step_ns) else {
+                            break;
+                        };
+                        t = next_t;
                         continue;
                     }
-                    vals.into_iter().fold(f64::INFINITY, f64::min)
+                    numeric_min
                 }
                 MetricFunc::MaxOverTime => {
-                    let vals: Vec<f64> = filtered
-                        .iter()
-                        .filter_map(|e| e.line.trim().parse::<f64>().ok())
-                        .collect();
-                    if vals.is_empty() {
-                        t += step_ns;
+                    if numeric_count == 0 {
+                        let Some(next_t) = advance_time(t, step_ns) else {
+                            break;
+                        };
+                        t = next_t;
                         continue;
                     }
-                    vals.into_iter().fold(f64::NEG_INFINITY, f64::max)
+                    numeric_max
                 }
             };
 
             samples.push((t, value));
-            t += step_ns;
+            let Some(next_t) = advance_time(t, step_ns) else {
+                break;
+            };
+            t = next_t;
         }
 
         if !samples.is_empty() {
@@ -193,6 +184,143 @@ fn evaluate_metric_query(
     LogQLResult::Matrix(results)
 }
 
+fn duration_to_i64_ns(duration: &Duration) -> i64 {
+    let ns = duration.as_nanos();
+    if ns > i64::MAX as u128 {
+        i64::MAX
+    } else {
+        ns as i64
+    }
+}
+
+fn evaluate_stream_query(
+    matchers: &[LogQLMatcher],
+    stages: &[PipelineStage],
+    store: &LogStore,
+    start_ns: i64,
+    end_ns: i64,
+    limit: Option<usize>,
+) -> LogQLResult {
+    let lm = convert_matchers(matchers);
+    let stream_ids = store.query_streams(&lm);
+
+    match limit {
+        Some(0) => LogQLResult::Streams(Vec::new()),
+        Some(limit) => LogQLResult::Streams(evaluate_limited_stream_query(
+            &stream_ids,
+            stages,
+            store,
+            start_ns,
+            end_ns,
+            limit,
+        )),
+        None => LogQLResult::Streams(evaluate_unlimited_stream_query(
+            &stream_ids,
+            stages,
+            store,
+            start_ns,
+            end_ns,
+        )),
+    }
+}
+
+fn evaluate_unlimited_stream_query(
+    stream_ids: &[u64],
+    stages: &[PipelineStage],
+    store: &LogStore,
+    start_ns: i64,
+    end_ns: i64,
+) -> Vec<StreamResult> {
+    let mut results = Vec::new();
+    for &sid in stream_ids {
+        let entries = store.get_entries(sid, start_ns, end_ns);
+        if entries.is_empty() {
+            continue;
+        }
+        let entry_tuples: Vec<(i64, String)> = entries
+            .iter()
+            .filter(|e| apply_stages(&e.line, stages))
+            .map(|e| (e.timestamp_ns, e.line.clone()))
+            .collect();
+        if entry_tuples.is_empty() {
+            continue;
+        }
+        let labels = store.get_stream_labels(sid).unwrap_or_default();
+        results.push(StreamResult {
+            labels,
+            entries: entry_tuples,
+        });
+    }
+    results
+}
+
+fn evaluate_limited_stream_query(
+    stream_ids: &[u64],
+    stages: &[PipelineStage],
+    store: &LogStore,
+    start_ns: i64,
+    end_ns: i64,
+    limit: usize,
+) -> Vec<StreamResult> {
+    let mut newest = BinaryHeap::with_capacity(limit);
+    let mut sequence = 0usize;
+
+    for &sid in stream_ids {
+        for entry in store.get_entries(sid, start_ns, end_ns) {
+            if !apply_stages(&entry.line, stages) {
+                continue;
+            }
+
+            let should_insert = newest.len() < limit
+                || newest
+                    .peek()
+                    .map(|Reverse((oldest_ts, _, _, _))| entry.timestamp_ns > *oldest_ts)
+                    .unwrap_or(false);
+            if !should_insert {
+                continue;
+            }
+
+            if newest.len() == limit {
+                newest.pop();
+            }
+
+            newest.push(Reverse((
+                entry.timestamp_ns,
+                sequence,
+                sid,
+                entry.line.clone(),
+            )));
+            sequence = sequence.wrapping_add(1);
+        }
+    }
+
+    let mut grouped: FxHashMap<u64, Vec<(i64, String)>> = FxHashMap::default();
+    for Reverse((timestamp_ns, _, sid, line)) in newest {
+        grouped.entry(sid).or_default().push((timestamp_ns, line));
+    }
+
+    let mut result_stream_ids: Vec<u64> = grouped.keys().copied().collect();
+    result_stream_ids.sort_unstable();
+
+    let mut results = Vec::with_capacity(result_stream_ids.len());
+    for sid in result_stream_ids {
+        let Some(mut entries) = grouped.remove(&sid) else {
+            continue;
+        };
+        entries.sort_by_key(|(timestamp_ns, _)| *timestamp_ns);
+        let labels = store.get_stream_labels(sid).unwrap_or_default();
+        results.push(StreamResult { labels, entries });
+    }
+    results
+}
+
+fn advance_time(current: i64, step: i64) -> Option<i64> {
+    if step <= 0 {
+        return None;
+    }
+    current.checked_add(step)
+}
+
 fn extract_selector_and_stages(
     expr: &LogQLExpr,
 ) -> (Vec<super::parser::LogQLMatcher>, Vec<PipelineStage>) {
@@ -201,8 +329,9 @@ fn extract_selector_and_stages(
         LogQLExpr::Pipeline {
             selector, stages, ..
         } => {
-            let (matchers, _) = extract_selector_and_stages(selector);
-            (matchers, stages.clone())
+            let (matchers, mut existing_stages) = extract_selector_and_stages(selector);
+            existing_stages.extend(stages.clone());
+            (matchers, existing_stages)
         }
         _ => (Vec::new(), Vec::new()),
     }
@@ -388,6 +517,40 @@ mod tests {
         match result {
             LogQLResult::Streams(streams) => {
                 assert_eq!(streams[0].entries.len(), 2);
+            }
+            _ => panic!("expected Streams"),
+        }
+    }
+
+    #[test]
+    fn test_limited_eval_applies_pipeline_before_limit() {
+        let store = make_store();
+        let expr = crate::query::logql::parser::parse_logql(r#"{service="payments"} |= "timeout""#)
+            .unwrap();
+        let result = evaluate_logql_limited(&expr, &store, 0, i64::MAX, None, Some(1));
+        match result {
+            LogQLResult::Streams(streams) => {
+                assert_eq!(streams.len(), 1);
+                assert_eq!(streams[0].entries.len(), 1);
+                assert!(streams[0].entries[0].1.contains("timeout"));
+            }
+            _ => panic!("expected Streams"),
+        }
+    }
+
+    #[test]
+    fn test_limited_eval_keeps_newest_entries_globally() {
+        let store = make_store();
+        let expr = crate::query::logql::parser::parse_logql(r#"{service=~".*"}"#).unwrap();
+        let result = evaluate_logql_limited(&expr, &store, 0, i64::MAX, None, Some(2));
+        match result {
+            LogQLResult::Streams(streams) => {
+                let mut timestamps: Vec<i64> = streams
+                    .iter()
+                    .flat_map(|stream| stream.entries.iter().map(|(timestamp, _)| *timestamp))
+                    .collect();
+                timestamps.sort_unstable();
+                assert_eq!(timestamps, vec![2_000_000_000, 3_000_000_000]);
             }
             _ => panic!("expected Streams"),
         }

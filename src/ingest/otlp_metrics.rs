@@ -12,7 +12,7 @@ use opentelemetry_proto::tonic::metrics::v1::metric::Data;
 use prost::Message;
 
 use super::label::{extract_resource_labels, promote_service_name};
-use super::{decode_body, is_json_content_type};
+use super::{decode_body, is_json_content_type, u64_to_i64_saturating};
 use crate::store::SharedState;
 use crate::store::metric_store::Sample;
 
@@ -69,7 +69,7 @@ pub async fn metrics_handler(
                         for dp in &gauge.data_points {
                             let labels = build_dp_labels(&resource_labels, &dp.attributes);
                             let value = extract_number_value(dp);
-                            let ts_ms = dp.time_unix_nano as i64 / 1_000_000;
+                            let ts_ms = u64_to_i64_saturating(dp.time_unix_nano) / 1_000_000;
                             prepared.push((
                                 metric_name.clone(),
                                 metric.name.clone(),
@@ -85,7 +85,7 @@ pub async fn metrics_handler(
                         for dp in &sum.data_points {
                             let labels = build_dp_labels(&resource_labels, &dp.attributes);
                             let value = extract_number_value(dp);
-                            let ts_ms = dp.time_unix_nano as i64 / 1_000_000;
+                            let ts_ms = u64_to_i64_saturating(dp.time_unix_nano) / 1_000_000;
                             prepared.push((
                                 metric_name.clone(),
                                 metric.name.clone(),
@@ -100,7 +100,7 @@ pub async fn metrics_handler(
                     Some(Data::Histogram(hist)) => {
                         for dp in &hist.data_points {
                             let base_labels = build_dp_labels(&resource_labels, &dp.attributes);
-                            let ts_ms = dp.time_unix_nano as i64 / 1_000_000;
+                            let ts_ms = u64_to_i64_saturating(dp.time_unix_nano) / 1_000_000;
 
                             // Store each bucket as a separate series with `le` label
                             let mut cumulative_count: u64 = 0;
@@ -155,7 +155,7 @@ pub async fn metrics_handler(
                     Some(Data::Summary(summary)) => {
                         for dp in &summary.data_points {
                             let base_labels = build_dp_labels(&resource_labels, &dp.attributes);
-                            let ts_ms = dp.time_unix_nano as i64 / 1_000_000;
+                            let ts_ms = u64_to_i64_saturating(dp.time_unix_nano) / 1_000_000;
 
                             // Store each quantile as a separate series
                             for qv in &dp.quantile_values {

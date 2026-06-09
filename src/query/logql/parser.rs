@@ -277,22 +277,18 @@ fn parse_json_or_label_filter(input: &str) -> IResult<&str, PipelineStage> {
 
     // Try "json" keyword
     if let Ok((rest, _)) = tag::<&str, &str, nom::error::Error<&str>>("json").parse_complete(input)
+        && is_keyword_boundary(rest)
     {
         // Make sure "json" is not part of a longer identifier
-        let next = rest.chars().next();
-        if next.is_none() || (!next.unwrap().is_alphanumeric() && next.unwrap() != '_') {
-            return Ok((rest, PipelineStage::JsonExtract));
-        }
+        return Ok((rest, PipelineStage::JsonExtract));
     }
 
     // Try "logfmt" keyword
     if let Ok((rest, _)) =
         tag::<&str, &str, nom::error::Error<&str>>("logfmt").parse_complete(input)
+        && is_keyword_boundary(rest)
     {
-        let next = rest.chars().next();
-        if next.is_none() || (!next.unwrap().is_alphanumeric() && next.unwrap() != '_') {
-            return Ok((rest, PipelineStage::LogfmtExtract));
-        }
+        return Ok((rest, PipelineStage::LogfmtExtract));
     }
 
     // Otherwise parse label filter: key op "value"
@@ -328,6 +324,12 @@ fn parse_json_or_label_filter(input: &str) -> IResult<&str, PipelineStage> {
             compiled_regex,
         },
     ))
+}
+
+fn is_keyword_boundary(rest: &str) -> bool {
+    rest.chars()
+        .next()
+        .is_none_or(|next| !next.is_alphanumeric() && next != '_')
 }
 
 fn parse_line_contains(input: &str) -> IResult<&str, PipelineStage> {

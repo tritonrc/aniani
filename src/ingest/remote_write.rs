@@ -78,7 +78,13 @@ pub async fn remote_write_handler(
                 tracing::warn!("decompressed remote write body exceeds 64 MiB limit");
                 return StatusCode::BAD_REQUEST;
             }
-            Err(_) => body.to_vec(),
+            Err(_) => {
+                if let Err(e) = super::ensure_body_size(&body) {
+                    tracing::warn!("remote write body rejected: {}", e);
+                    return StatusCode::PAYLOAD_TOO_LARGE;
+                }
+                body.to_vec()
+            }
         }
     };
 

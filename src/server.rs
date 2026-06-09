@@ -1,10 +1,11 @@
 //! Axum router setup with all routes.
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, post};
 
 use crate::api;
-use crate::ingest;
+use crate::ingest::{self, MAX_DECOMPRESSED_SIZE};
 use crate::query::{logql, promql, traceql};
 use crate::store::SharedState;
 
@@ -62,5 +63,6 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/v1/metadata", get(api::metadata::metadata))
         .route("/api/v1/openapi.json", get(api::openapi::openapi_spec))
         .route("/ready", get(api::health::ready))
+        .layer(DefaultBodyLimit::max(MAX_DECOMPRESSED_SIZE))
         .with_state(state)
 }

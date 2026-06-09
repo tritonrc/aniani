@@ -17,6 +17,7 @@ const TRACEQL_HINT: &str = "Example: { resource.service.name = \"myapp\" && stat
 
 /// Default limit of traces returned when no query is provided.
 const DEFAULT_RECENT_TRACES_LIMIT: usize = 20;
+const MAX_TRACE_SEARCH_LIMIT: usize = 1000;
 
 #[derive(Debug, Deserialize)]
 pub struct SearchParams {
@@ -37,6 +38,8 @@ fn param_to_ns(val: u64) -> i64 {
         (val as i64).saturating_mul(1_000_000_000)
     } else if val < 100_000_000_000_000 {
         (val as i64).saturating_mul(1_000_000)
+    } else if val > i64::MAX as u64 {
+        i64::MAX
     } else {
         val as i64
     }
@@ -56,13 +59,17 @@ pub async fn search(
     let q = params.q.unwrap_or_default();
     if q.is_empty() {
         // No query: return recent traces, optionally filtered by time range.
-        let limit = params.limit.unwrap_or(DEFAULT_RECENT_TRACES_LIMIT);
-        let mut recent = store.recent_traces(store.traces.len());
+        let limit = bounded_limit(params.limit, DEFAULT_RECENT_TRACES_LIMIT);
+        let mut recent = if start_ns.is_some() || end_ns.is_some() {
+            store.recent_traces(store.traces.len())
+        } else {
+            store.recent_traces(limit)
+        };
 
         // Apply time range filter
         if start_ns.is_some() || end_ns.is_some() {
             recent.retain(|tr| {
-                let trace_end_ns = tr.start_time_ns + tr.duration_ns;
+                let trace_end_ns = tr.start_time_ns.saturating_add(tr.duration_ns);
                 let after_start = start_ns.is_none_or(|st| trace_end_ns >= st);
                 let before_end = end_ns.is_none_or(|en| tr.start_time_ns <= en);
                 after_start && before_end
@@ -106,7 +113,7 @@ pub async fn search(
         .into_iter()
         .filter(|r| {
             r.matched_spans.iter().any(|s| {
-                let span_end = s.start_time_ns + s.duration_ns;
+                let span_end = s.start_time_ns.saturating_add(s.duration_ns);
                 let after_start = start_ns.is_none_or(|st| span_end >= st);
                 let before_end = end_ns.is_none_or(|en| s.start_time_ns <= en);
                 after_start && before_end
@@ -114,9 +121,7 @@ pub async fn search(
         })
         .collect();
 
-    if let Some(limit) = params.limit {
-        results.truncate(limit);
-    }
+    results.truncate(bounded_limit(params.limit, MAX_TRACE_SEARCH_LIMIT));
 
     let traces: Vec<Value> = results
         .iter()
@@ -222,7 +227,7 @@ pub async fn get_trace(
                     "name": store.resolve(&span.name),
                     "kind": 1,
                     "startTimeUnixNano": span.start_time_ns.to_string(),
-                    "endTimeUnixNano": (span.start_time_ns + span.duration_ns).to_string(),
+                    "endTimeUnixNano": span.start_time_ns.saturating_add(span.duration_ns).to_string(),
                     "status": {
                         "code": match span.status {
                             SpanStatus::Unset => 0,
@@ -292,6 +297,10 @@ fn parse_trace_id(s: &str) -> Option<[u8; 16]> {
     Some(bytes)
 }
 
+fn bounded_limit(limit: Option<usize>, default: usize) -> usize {
+    limit.unwrap_or(default).min(MAX_TRACE_SEARCH_LIMIT)
+}
+
 // Inline hex encoding module (avoid dependency)
 mod hex {
     pub fn encode_upper(bytes: &[u8]) -> String {
@@ -299,5 +308,30 @@ mod hex {
             .iter()
             .map(|b| format!("{:02X}", b))
             .collect::<String>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_param_to_ns_saturates_huge_nanosecond_value() {
+        assert_eq!(param_to_ns(u64::MAX), i64::MAX);
+    }
+
+    #[test]
+    fn test_bounded_limit_caps_untrusted_limit() {
+        assert_eq!(
+            bounded_limit(None, DEFAULT_RECENT_TRACES_LIMIT),
+            DEFAULT_RECENT_TRACES_LIMIT
+        );
+        assert_eq!(
+            bounded_limit(
+                Some(MAX_TRACE_SEARCH_LIMIT + 1),
+                DEFAULT_RECENT_TRACES_LIMIT
+            ),
+            MAX_TRACE_SEARCH_LIMIT
+        );
     }
 }

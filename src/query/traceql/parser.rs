@@ -405,13 +405,21 @@ fn parse_duration_value(input: &str) -> IResult<&str, Duration> {
         nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Float))
     })?;
 
-    let duration = match unit {
-        "ms" => Duration::from_secs_f64(num / 1000.0),
-        "s" => Duration::from_secs_f64(num),
-        "m" => Duration::from_secs_f64(num * 60.0),
-        "h" => Duration::from_secs_f64(num * 3600.0),
+    let secs = match unit {
+        "ms" => num / 1000.0,
+        "s" => num,
+        "m" => num * 60.0,
+        "h" => num * 3600.0,
         _ => unreachable!(),
     };
+    if !secs.is_finite() || secs < 0.0 || secs > Duration::MAX.as_secs_f64() {
+        return Err(nom::Err::Failure(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Float,
+        )));
+    }
+
+    let duration = Duration::from_secs_f64(secs);
 
     Ok((input, duration))
 }
@@ -460,7 +468,12 @@ fn parse_duration_agg_filter(input: &str) -> IResult<&str, PipelineStage> {
     let (input, op) = parse_compare_op(input)?;
     let (input, _) = multispace0(input)?;
     let (input, dur) = parse_duration_value(input)?;
-    let value_ns = dur.as_nanos() as i64;
+    let value_ns = duration_to_i64_ns(dur).ok_or_else(|| {
+        nom::Err::Failure(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::TooLarge,
+        ))
+    })?;
     let stage = match agg_fn {
         "avg" => PipelineStage::AvgDuration { op, value_ns },
         "max" => PipelineStage::MaxDuration { op, value_ns },
@@ -468,6 +481,15 @@ fn parse_duration_agg_filter(input: &str) -> IResult<&str, PipelineStage> {
         _ => unreachable!(),
     };
     Ok((input, stage))
+}
+
+fn duration_to_i64_ns(duration: Duration) -> Option<i64> {
+    let ns = duration.as_nanos();
+    if ns > i64::MAX as u128 {
+        None
+    } else {
+        Some(ns as i64)
+    }
 }
 
 #[cfg(test)]
@@ -501,6 +523,15 @@ mod tests {
             }
             _ => panic!("expected SpanSelector"),
         }
+    }
+
+    #[test]
+    fn test_huge_duration_literal_returns_parse_error() {
+        let huge_duration_query = format!("{{ duration > {}h }}", "9".repeat(10_000));
+        assert!(parse_traceql(&huge_duration_query).is_err());
+        assert!(
+            parse_traceql("{ status = error } | avg(duration) > 9223372036854775808ms").is_err()
+        );
     }
 
     #[test]
