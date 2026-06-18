@@ -36,6 +36,11 @@ smallvec = { version = "1", features = ["serde"] }
 bytes = "1"
 http = "1"
 tower-http = { version = "0.6", features = ["cors"] }
+rust-embed = { version = "8", optional = true }
+
+[features]
+default = ["ui"]
+ui = ["dep:rust-embed"]
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
