@@ -95,3 +95,44 @@ header h1 { margin: 16px 0 8px; font-size: 20px; }
 }
 
 .detail { margin-top: 24px; }
+
+.picker { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
+.picker-label { color: var(--muted); font-size: 12px; margin-right: 2px; }
+.chip {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 3px 9px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.chip:hover { border-color: var(--accent); color: var(--accent); }
+.svc-select {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+.ai-ask { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.ai-ask input {
+  flex: 1;
+  min-width: 220px;
+  background: var(--panel);
+  border: 1px dashed var(--border);
+  color: var(--fg);
+  padding: 7px 10px;
+  border-radius: 4px;
+}
+.ai-ask button {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  padding: 7px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.ai-ask button:disabled { opacity: 0.5; cursor: default; }
+.ai-status { color: var(--muted); font-size: 12px; }
