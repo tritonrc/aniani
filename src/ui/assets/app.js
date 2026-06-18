@@ -3,12 +3,13 @@ import { createApp, reactive } from 'vue'
 // --- shared fetch helper: parses JSON, throws a useful message on error ---
 async function apiGet(url) {
   let res
+  let text
   try {
     res = await fetch(url)
+    text = await res.text()
   } catch (e) {
     throw new Error('network error: ' + e.message)
   }
-  const text = await res.text()
   let json = null
   try {
     json = JSON.parse(text)
@@ -81,13 +82,17 @@ const Landing = {
     },
   },
   async mounted() {
-    try {
-      const svc = await apiGet('/api/v1/services')
-      this.services = (svc.data && svc.data.services) || []
-      this.status = await apiGet('/api/v1/status')
-    } catch (e) {
-      this.error = e.message
+    // Load services and status independently so one failing doesn't blank the other.
+    const [svc, st] = await Promise.allSettled([
+      apiGet('/api/v1/services'),
+      apiGet('/api/v1/status'),
+    ])
+    if (svc.status === 'fulfilled') {
+      this.services = (svc.value.data && svc.value.data.services) || []
+    } else {
+      this.error = svc.reason.message
     }
+    if (st.status === 'fulfilled') this.status = st.value
   },
 }
 
@@ -181,21 +186,22 @@ const AiAsk = {
       this.busy = true
       this.downloading = this.state === 'downloadable' || this.state === 'downloading'
       this.status = this.downloading ? 'Downloading on-device model (first use only)…' : ''
+      let session
       try {
-        const session = await globalThis.LanguageModel.create({
+        session = await globalThis.LanguageModel.create({
           ...AI_TEXT_EN,
           initialPrompts: [{ role: 'system', content: this.systemPrompt() }],
         })
         let out = (await session.prompt(this.text)).trim()
         const fenceMatch = out.match(/```[a-z]*\n?([\s\S]*?)```/i)
         out = (fenceMatch ? fenceMatch[1] : out).trim()
-        session.destroy && session.destroy()
         this.state = 'available'
         this.status = ''
         if (out) this.$emit('query', out)
       } catch (e) {
         this.status = 'AI error: ' + (e && e.message ? e.message : String(e))
       } finally {
+        if (session && session.destroy) session.destroy()
         this.busy = false
         this.downloading = false
       }
@@ -499,11 +505,10 @@ const Traces = {
       this.selectedId = id
       this.selected = null
       try {
-        this.selected = await window.__aniani.apiGet(
-          '/api/traces/' + encodeURIComponent(id),
-        )
+        const data = await window.__aniani.apiGet('/api/traces/' + encodeURIComponent(id))
+        if (this.selectedId === id) this.selected = data // ignore stale responses
       } catch (e) {
-        this.detailError = e.message
+        if (this.selectedId === id) this.detailError = e.message
       }
     },
   },

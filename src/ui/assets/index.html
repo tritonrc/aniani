@@ -5,6 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Aniani</title>
     <link rel="stylesheet" href="/ui/assets/style.css" />
+    <!--
+      Vue is loaded from a pinned CDN URL (no build step). Import maps do not yet
+      support Subresource Integrity, so there is no integrity hash; the version is
+      pinned to limit risk. Trade-off: the first load needs internet access and
+      trusts the CDN. Bundling Vue into the embedded assets would remove both, but
+      requires a build step this UI intentionally avoids.
+    -->
     <script type="importmap">
       {
         "imports": {
