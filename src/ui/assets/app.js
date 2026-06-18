@@ -82,8 +82,98 @@ const Landing = {
   },
 }
 
+const AiAsk = {
+  props: { lang: { type: String, required: true } },
+  emits: ['query'],
+  template: `
+    <div class="ai-ask" v-if="supported">
+      <input
+        v-model="text"
+        :placeholder="placeholder"
+        spellcheck="false"
+        @keydown.enter.prevent="ask"
+      />
+      <button @click="ask" :disabled="busy || state === 'downloading'">
+        {{ state === 'downloading' ? 'Downloading model…' : 'Ask AI' }}
+      </button>
+      <span class="ai-status" v-if="status">{{ status }}</span>
+    </div>
+  `,
+  data() {
+    return { supported: false, state: 'unknown', text: '', busy: false, status: '' }
+  },
+  computed: {
+    placeholder() {
+      const ex = {
+        logql: 'e.g. errors from payments in the last hour',
+        promql: 'e.g. request latency for the gateway service',
+        traceql: 'e.g. slow traces in payments',
+      }
+      return 'Ask in plain English — ' + (ex[this.lang] || '')
+    },
+    langName() {
+      return { logql: 'LogQL', promql: 'PromQL', traceql: 'TraceQL' }[this.lang] || this.lang
+    },
+  },
+  async mounted() {
+    if (!('LanguageModel' in globalThis)) return
+    try {
+      this.state = await globalThis.LanguageModel.availability()
+      this.supported = this.state !== 'unavailable'
+    } catch (_) {
+      this.supported = false
+    }
+  },
+  methods: {
+    systemPrompt() {
+      const v = window.__aniani.vocab
+      const services = (v.services || []).map((s) => s.name).join(', ') || '(none)'
+      const metrics = (v.metricNames || []).join(', ') || '(none)'
+      const syntax = {
+        logql: 'LogQL stream selectors like {service="x", level="error"} optionally followed by a |= "substring" filter',
+        promql: 'PromQL using the metric names below, e.g. metric_name or rate(metric_name[5m])',
+        traceql: 'TraceQL like { .service.name = "x" }',
+      }[this.lang]
+      return (
+        'You translate a natural-language request into a single ' +
+        this.langName +
+        ' query for the Aniani observability engine. ' +
+        'Output ONLY the query, no explanation, no code fences. ' +
+        'Use ' + syntax + '. ' +
+        'Known service names: ' + services + '. ' +
+        'Known metric names: ' + metrics + '.'
+      )
+    },
+    async ask() {
+      if (!this.text.trim()) return
+      this.busy = true
+      this.status = ''
+      try {
+        if (this.state === 'downloadable' || this.state === 'downloading') {
+          this.state = 'downloading'
+          this.status = 'Downloading on-device model (first use only)…'
+        }
+        const session = await globalThis.LanguageModel.create({
+          initialPrompts: [{ role: 'system', content: this.systemPrompt() }],
+        })
+        let out = (await session.prompt(this.text)).trim()
+        out = out.replace(/^```[a-z]*\n?/i, '').replace(/```$/, '').trim()
+        session.destroy && session.destroy()
+        this.state = 'available'
+        this.status = ''
+        if (out) this.$emit('query', out)
+      } catch (e) {
+        this.status = 'AI error: ' + (e && e.message ? e.message : String(e))
+      } finally {
+        this.busy = false
+      }
+    },
+  },
+}
+
 // Placeholder components replaced in Tasks 4-6.
 const Logs = {
+  components: { AiAsk },
   template: `
     <section class="view">
       <h2>Logs</h2>
@@ -97,6 +187,7 @@ const Logs = {
         />
         <button type="submit" :disabled="loading">Run</button>
       </form>
+      <ai-ask :lang="'logql'" @query="onAi"></ai-ask>
       <div class="picker" v-if="chips.length">
         <span class="picker-label">Quick:</span>
         <button class="chip" v-for="c in chips" :key="c" @click="pick(c)">{{ c }}</button>
@@ -131,6 +222,7 @@ const Logs = {
     },
   },
   methods: {
+    onAi(q) { this.query = q; this.run() },
     pick(c) { this.query = c; this.run() },
     async run() {
       this.error = ''
@@ -173,6 +265,7 @@ const Logs = {
   },
 }
 const Metrics = {
+  components: { AiAsk },
   template: `
     <section class="view">
       <h2>Metrics</h2>
@@ -186,6 +279,7 @@ const Metrics = {
         />
         <button type="submit" :disabled="loading">Run</button>
       </form>
+      <ai-ask :lang="'promql'" @query="onAi"></ai-ask>
       <div class="picker">
         <span class="picker-label">Service:</span>
         <select class="svc-select" v-model="service" @change="onService">
@@ -230,6 +324,7 @@ const Metrics = {
     },
   },
   methods: {
+    onAi(q) { this.query = q; this.run() },
     async onService() { if (this.service) await window.__aniani.loadCatalog(this.service) },
     pick(c) { this.query = c; this.run() },
     seriesLabel(metric) {
@@ -274,6 +369,7 @@ const Metrics = {
   },
 }
 const Traces = {
+  components: { AiAsk },
   template: `
     <section class="view">
       <h2>Traces</h2>
@@ -287,6 +383,7 @@ const Traces = {
         />
         <button type="submit" :disabled="loading">Run</button>
       </form>
+      <ai-ask :lang="'traceql'" @query="onAi"></ai-ask>
       <div class="picker" v-if="chips.length">
         <span class="picker-label">Quick:</span>
         <button class="chip" v-for="c in chips" :key="c" @click="pick(c)">{{ c }}</button>
@@ -335,6 +432,7 @@ const Traces = {
     },
   },
   methods: {
+    onAi(q) { this.query = q; this.run() },
     pick(c) { this.query = c; this.run() },
     pretty(v) {
       return JSON.stringify(v, null, 2)
