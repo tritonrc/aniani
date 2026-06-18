@@ -27,6 +27,11 @@ function hourAgoMs() {
   return Date.now() - 3600 * 1000
 }
 
+// Escape a label value for safe insertion into a double-quoted query literal.
+function escLabel(v) {
+  return String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+}
+
 const vocab = reactive({
   services: [],     // [{ name, signals: [] }]
   metricNames: [],  // ["http_request_duration_ms", ...]
@@ -104,14 +109,14 @@ const AiAsk = {
         spellcheck="false"
         @keydown.enter.prevent="ask"
       />
-      <button @click="ask" :disabled="busy || state === 'downloading'">
-        {{ state === 'downloading' ? 'Downloading model…' : 'Ask AI' }}
+      <button @click="ask" :disabled="busy">
+        {{ busy ? (downloading ? 'Downloading model…' : 'Thinking…') : 'Ask AI' }}
       </button>
       <span class="ai-status" v-if="status">{{ status }}</span>
     </div>
   `,
   data() {
-    return { supported: false, state: 'unknown', text: '', busy: false, status: '' }
+    return { supported: false, state: 'unknown', text: '', busy: false, downloading: false, status: '' }
   },
   computed: {
     placeholder() {
@@ -174,12 +179,9 @@ const AiAsk = {
     async ask() {
       if (!this.text.trim()) return
       this.busy = true
-      this.status = ''
+      this.downloading = this.state === 'downloadable' || this.state === 'downloading'
+      this.status = this.downloading ? 'Downloading on-device model (first use only)…' : ''
       try {
-        if (this.state === 'downloadable' || this.state === 'downloading') {
-          this.state = 'downloading'
-          this.status = 'Downloading on-device model (first use only)…'
-        }
         const session = await globalThis.LanguageModel.create({
           ...AI_TEXT_EN,
           initialPrompts: [{ role: 'system', content: this.systemPrompt() }],
@@ -195,6 +197,7 @@ const AiAsk = {
         this.status = 'AI error: ' + (e && e.message ? e.message : String(e))
       } finally {
         this.busy = false
+        this.downloading = false
       }
     },
   },
@@ -246,7 +249,7 @@ const Logs = {
     chips() {
       const svcs = (window.__aniani.vocab.services || [])
         .filter((s) => (s.signals || []).includes('logs'))
-        .map((s) => '{service="' + s.name + '"}')
+        .map((s) => '{service="' + window.__aniani.escLabel(s.name) + '"}')
       return [...svcs, '{level="error"}']
     },
   },
@@ -379,16 +382,22 @@ const Metrics = {
           '&end=' + endSec +
           '&step=60'
         const res = await window.__aniani.apiGet(url)
-        const result = (res.data && res.data.result) || []
-        this.rows = result.map((s) => {
-          let value = ''
-          if (Array.isArray(s.values) && s.values.length) {
-            value = s.values[s.values.length - 1][1] // matrix: last sample
-          } else if (Array.isArray(s.value)) {
-            value = s.value[1] // vector: single sample
-          }
-          return { series: this.seriesLabel(s.metric || {}), value }
-        })
+        const data = res.data || {}
+        if (data.resultType === 'scalar' && Array.isArray(data.result)) {
+          // scalar: data.result is a single [ts, value] tuple, not a series array
+          this.rows = [{ series: '(scalar)', value: data.result[1] }]
+        } else {
+          const result = data.result || []
+          this.rows = result.map((s) => {
+            let value = ''
+            if (Array.isArray(s.values) && s.values.length) {
+              value = s.values[s.values.length - 1][1] // matrix: last sample
+            } else if (Array.isArray(s.value)) {
+              value = s.value[1] // vector: single sample
+            }
+            return { series: this.seriesLabel(s.metric || {}), value }
+          })
+        }
       } catch (e) {
         this.error = e.message
       } finally {
@@ -457,7 +466,7 @@ const Traces = {
     chips() {
       return (window.__aniani.vocab.services || [])
         .filter((s) => (s.signals || []).includes('traces'))
-        .map((s) => '{ resource.service.name = "' + s.name + '" }')
+        .map((s) => '{ resource.service.name = "' + window.__aniani.escLabel(s.name) + '" }')
     },
   },
   methods: {
@@ -540,7 +549,7 @@ const App = {
 }
 
 // Export the shared helpers so later tasks can reference them within this file.
-window.__aniani = { apiGet, hourAgoMs, vocab, loadVocab, loadCatalog }
+window.__aniani = { apiGet, hourAgoMs, escLabel, vocab, loadVocab, loadCatalog }
 
 loadVocab()
 createApp(App).mount('#app')
