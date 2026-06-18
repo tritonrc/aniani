@@ -86,6 +86,13 @@ const Landing = {
   },
 }
 
+// English text in/out — silences Chrome's "no output language" warning and
+// improves output quality. Shared by availability() and create().
+const AI_TEXT_EN = {
+  expectedInputs: [{ type: 'text', languages: ['en'] }],
+  expectedOutputs: [{ type: 'text', languages: ['en'] }],
+}
+
 const AiAsk = {
   props: { lang: { type: String, required: true } },
   emits: ['query'],
@@ -122,7 +129,7 @@ const AiAsk = {
   async mounted() {
     if (!('LanguageModel' in globalThis)) return
     try {
-      this.state = await globalThis.LanguageModel.availability()
+      this.state = await globalThis.LanguageModel.availability(AI_TEXT_EN)
       this.supported = this.state !== 'unavailable'
     } catch (_) {
       this.supported = false
@@ -135,8 +142,22 @@ const AiAsk = {
       const metrics = (v.metricNames || []).join(', ') || '(none)'
       const syntax = {
         logql: 'LogQL stream selectors like {service="x", level="error"} optionally followed by a |= "substring" filter',
-        promql: 'PromQL using the metric names below, e.g. metric_name or rate(metric_name[5m])',
+        promql: 'PromQL using the metric names below, e.g. metric_name or metric_name{service="x"} or rate(metric_name[5m])',
         traceql: 'TraceQL like { resource.service.name = "x" }',
+      }[this.lang]
+      const examples = {
+        logql: [
+          'errors from payments => {service="payments", level="error"}',
+          'gateway logs mentioning timeout => {service="gateway"} |= "timeout"',
+        ],
+        promql: [
+          'request duration for gateway => http_request_duration_ms{service="gateway"}',
+          'all values of stock_level => stock_level',
+        ],
+        traceql: [
+          'traces from payments => { resource.service.name = "payments" }',
+          'traces from the gateway service => { resource.service.name = "gateway" }',
+        ],
       }[this.lang]
       return (
         'You translate a natural-language request into a single ' +
@@ -145,7 +166,8 @@ const AiAsk = {
         'Output ONLY the query, no explanation, no code fences. ' +
         'Use ' + syntax + '. ' +
         'Known service names: ' + services + '. ' +
-        'Known metric names: ' + metrics + '.'
+        'Known metric names: ' + metrics + '. ' +
+        'Examples (request => query): ' + examples.join(' ; ') + '.'
       )
     },
     async ask() {
@@ -158,6 +180,7 @@ const AiAsk = {
           this.status = 'Downloading on-device model (first use only)…'
         }
         const session = await globalThis.LanguageModel.create({
+          ...AI_TEXT_EN,
           initialPrompts: [{ role: 'system', content: this.systemPrompt() }],
         })
         let out = (await session.prompt(this.text)).trim()
