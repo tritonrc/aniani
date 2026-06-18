@@ -136,7 +136,7 @@ const AiAsk = {
       const syntax = {
         logql: 'LogQL stream selectors like {service="x", level="error"} optionally followed by a |= "substring" filter',
         promql: 'PromQL using the metric names below, e.g. metric_name or rate(metric_name[5m])',
-        traceql: 'TraceQL like { .service.name = "x" }',
+        traceql: 'TraceQL like { resource.service.name = "x" }',
       }[this.lang]
       return (
         'You translate a natural-language request into a single ' +
@@ -382,7 +382,7 @@ const Traces = {
         <input
           v-model="query"
           list="traces-suggestions"
-          placeholder='{ .service.name = "my-service" }'
+          placeholder='{ resource.service.name = "my-service" }'
           spellcheck="false"
           autocapitalize="off"
         />
@@ -433,7 +433,7 @@ const Traces = {
     chips() {
       return (window.__aniani.vocab.services || [])
         .filter((s) => (s.signals || []).includes('traces'))
-        .map((s) => '{ .service.name = "' + s.name + '" }')
+        .map((s) => '{ resource.service.name = "' + s.name + '" }')
     },
   },
   methods: {
