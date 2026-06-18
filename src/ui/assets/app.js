@@ -1,4 +1,4 @@
-import { createApp } from 'vue'
+import { createApp, reactive } from 'vue'
 
 // --- shared fetch helper: parses JSON, throws a useful message on error ---
 async function apiGet(url) {
@@ -25,6 +25,25 @@ async function apiGet(url) {
 // last-hour time window helpers
 function hourAgoMs() {
   return Date.now() - 3600 * 1000
+}
+
+const vocab = reactive({
+  services: [],     // [{ name, signals: [] }]
+  metricNames: [],  // ["http_request_duration_ms", ...]
+  catalog: {},      // { [service]: { metrics: [], log_labels: [] } }
+})
+async function loadVocab() {
+  try { const s = await apiGet('/api/v1/services'); vocab.services = (s.data && s.data.services) || [] } catch (_) {}
+  try { const m = await apiGet('/api/v1/label/__name__/values'); vocab.metricNames = m.data || [] } catch (_) {}
+}
+async function loadCatalog(service) {
+  if (!service) return null
+  if (vocab.catalog[service]) return vocab.catalog[service]
+  try {
+    const c = await apiGet('/api/v1/catalog?service=' + encodeURIComponent(service))
+    vocab.catalog[service] = (c && c.data) || {}
+    return vocab.catalog[service]
+  } catch (_) { return null }
 }
 
 const Landing = {
@@ -71,12 +90,20 @@ const Logs = {
       <form class="query-bar" @submit.prevent="run">
         <input
           v-model="query"
+          list="logs-suggestions"
           placeholder='{service="my-service"}'
           spellcheck="false"
           autocapitalize="off"
         />
         <button type="submit" :disabled="loading">Run</button>
       </form>
+      <div class="picker" v-if="chips.length">
+        <span class="picker-label">Quick:</span>
+        <button class="chip" v-for="c in chips" :key="c" @click="pick(c)">{{ c }}</button>
+      </div>
+      <datalist id="logs-suggestions">
+        <option v-for="c in chips" :key="c" :value="c"></option>
+      </datalist>
       <p v-if="error" class="error">{{ error }}</p>
       <p v-if="loading" class="muted">Loading…</p>
       <table v-if="rows.length" class="results">
@@ -95,7 +122,16 @@ const Logs = {
   data() {
     return { query: '', rows: [], error: '', loading: false, ran: false }
   },
+  computed: {
+    chips() {
+      const svcs = (window.__aniani.vocab.services || [])
+        .filter((s) => (s.signals || []).includes('logs'))
+        .map((s) => '{service="' + s.name + '"}')
+      return [...svcs, '{level="error"}']
+    },
+  },
   methods: {
+    pick(c) { this.query = c; this.run() },
     async run() {
       this.error = ''
       this.loading = true
@@ -143,12 +179,27 @@ const Metrics = {
       <form class="query-bar" @submit.prevent="run">
         <input
           v-model="query"
+          list="metric-names"
           placeholder="rate(http_requests_total[5m])"
           spellcheck="false"
           autocapitalize="off"
         />
         <button type="submit" :disabled="loading">Run</button>
       </form>
+      <div class="picker">
+        <span class="picker-label">Service:</span>
+        <select class="svc-select" v-model="service" @change="onService">
+          <option value="">All services</option>
+          <option v-for="s in metricServices" :key="s" :value="s">{{ s }}</option>
+        </select>
+      </div>
+      <div class="picker" v-if="chips.length">
+        <span class="picker-label">Metrics:</span>
+        <button class="chip" v-for="c in chips" :key="c" @click="pick(c)">{{ c }}</button>
+      </div>
+      <datalist id="metric-names">
+        <option v-for="c in chips" :key="c" :value="c"></option>
+      </datalist>
       <p v-if="error" class="error">{{ error }}</p>
       <p v-if="loading" class="muted">Loading…</p>
       <table v-if="rows.length" class="results">
@@ -164,9 +215,23 @@ const Metrics = {
     </section>
   `,
   data() {
-    return { query: '', rows: [], error: '', loading: false, ran: false }
+    return { query: '', rows: [], error: '', loading: false, ran: false, service: '' }
+  },
+  computed: {
+    metricServices() {
+      return (window.__aniani.vocab.services || [])
+        .filter((s) => (s.signals || []).includes('metrics'))
+        .map((s) => s.name)
+    },
+    chips() {
+      const v = window.__aniani.vocab
+      if (this.service && v.catalog[this.service]) return v.catalog[this.service].metrics || []
+      return v.metricNames || []
+    },
   },
   methods: {
+    async onService() { if (this.service) await window.__aniani.loadCatalog(this.service) },
+    pick(c) { this.query = c; this.run() },
     seriesLabel(metric) {
       const name = metric.__name__ || ''
       const labels = Object.entries(metric)
@@ -215,12 +280,20 @@ const Traces = {
       <form class="query-bar" @submit.prevent="run">
         <input
           v-model="query"
+          list="traces-suggestions"
           placeholder='{ .service.name = "my-service" }'
           spellcheck="false"
           autocapitalize="off"
         />
         <button type="submit" :disabled="loading">Run</button>
       </form>
+      <div class="picker" v-if="chips.length">
+        <span class="picker-label">Quick:</span>
+        <button class="chip" v-for="c in chips" :key="c" @click="pick(c)">{{ c }}</button>
+      </div>
+      <datalist id="traces-suggestions">
+        <option v-for="c in chips" :key="c" :value="c"></option>
+      </datalist>
       <p v-if="error" class="error">{{ error }}</p>
       <p v-if="loading" class="muted">Loading…</p>
       <table v-if="traces.length" class="results">
@@ -254,7 +327,15 @@ const Traces = {
       detailError: '',
     }
   },
+  computed: {
+    chips() {
+      return (window.__aniani.vocab.services || [])
+        .filter((s) => (s.signals || []).includes('traces'))
+        .map((s) => '{ .service.name = "' + s.name + '" }')
+    },
+  },
   methods: {
+    pick(c) { this.query = c; this.run() },
     pretty(v) {
       return JSON.stringify(v, null, 2)
     },
@@ -332,6 +413,7 @@ const App = {
 }
 
 // Export the shared helpers so later tasks can reference them within this file.
-window.__aniani = { apiGet, hourAgoMs }
+window.__aniani = { apiGet, hourAgoMs, vocab, loadVocab, loadCatalog }
 
+loadVocab()
 createApp(App).mount('#app')
