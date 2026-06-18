@@ -234,9 +234,10 @@ const Traces = {
         </tbody>
       </table>
       <p v-else-if="ran && !loading && !error" class="muted">No traces matched.</p>
-      <div v-if="selected" class="detail">
+      <div v-if="selectedId" class="detail">
         <h3>Trace {{ selectedId }}</h3>
         <p v-if="detailError" class="error">{{ detailError }}</p>
+        <p v-else-if="!selected" class="muted">Loading…</p>
         <pre class="json" v-else>{{ pretty(selected) }}</pre>
       </div>
     </section>
@@ -263,6 +264,8 @@ const Traces = {
       this.ran = true
       this.traces = []
       this.selected = null
+      this.selectedId = ''
+      this.detailError = ''
       try {
         const url =
           '/api/search?q=' + encodeURIComponent(this.query) + '&limit=20'
