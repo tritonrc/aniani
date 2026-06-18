@@ -7,3 +7,5 @@ pub mod query;
 pub mod server;
 pub mod snapshot;
 pub mod store;
+#[cfg(feature = "ui")]
+pub mod ui;

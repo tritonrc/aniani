@@ -11,7 +11,7 @@ use crate::store::SharedState;
 
 /// Build the complete Axum router with all routes.
 pub fn build_router(state: SharedState) -> Router {
-    Router::new()
+    let router = Router::new()
         // Ingestion
         .route("/loki/api/v1/push", post(ingest::loki::push_handler))
         .route("/v1/metrics", post(ingest::otlp_metrics::metrics_handler))
@@ -62,7 +62,12 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/v1/summary", get(api::summary::summary))
         .route("/api/v1/metadata", get(api::metadata::metadata))
         .route("/api/v1/openapi.json", get(api::openapi::openapi_spec))
-        .route("/ready", get(api::health::ready))
+        .route("/ready", get(api::health::ready));
+
+    #[cfg(feature = "ui")]
+    let router = router.merge(crate::ui::routes());
+
+    router
         .layer(DefaultBodyLimit::max(MAX_DECOMPRESSED_SIZE))
         .with_state(state)
 }

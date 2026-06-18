@@ -280,6 +280,12 @@ Implementation: for each store, resolve the `Spur` for the `service` label name,
 
 ---
 
+## Web UI
+
+An optional web UI is gated behind the `ui` Cargo feature, which is on by default; building with `--no-default-features` drops it for a smaller binary with no embedded assets. The UI's `index.html`, `app.js`, and `style.css` are embedded into the binary at compile time via `rust-embed`, so there is no JavaScript build step, and the page is served under `/ui` with its assets at `/ui/assets/{file}`. (In debug builds `rust-embed` reads these assets from disk at runtime, which conveniently allows live editing during development; `cargo build --release` bakes them into a fully self-contained binary.) It is a Vue 3 single-page app that loads Vue from a CDN through an import map, which means the first page load requires internet access. A reactive tab switch — no client-side router — toggles between four views: Overview (services and status), Logs (LogQL), Metrics (PromQL), and Traces (TraceQL with drill-down into a trace's spans), each calling the existing JSON query APIs. As with the rest of Aniani, there is no auth or TLS; the UI is intended for localhost-only use.
+
+---
+
 ## Storage Engine
 
 ### LogStore
