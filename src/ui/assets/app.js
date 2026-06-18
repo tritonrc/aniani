@@ -142,7 +142,7 @@ const AiAsk = {
       const metrics = (v.metricNames || []).join(', ') || '(none)'
       const syntax = {
         logql: 'LogQL stream selectors like {service="x", level="error"} optionally followed by a |= "substring" filter',
-        promql: 'PromQL using the metric names below, e.g. metric_name or metric_name{service="x"} or rate(metric_name[5m])',
+        promql: 'PromQL. A bare metric with optional label filter: metric_name{service="x"}. For a rate over time, put the [duration] range AFTER the closing brace, inside a range function: rate(metric_name{service="x"}[5m]). NEVER put a [duration] range inside the {} braces — only label matchers go inside {}',
         traceql: 'TraceQL like { resource.service.name = "x" }',
       }[this.lang]
       const examples = {
@@ -151,7 +151,8 @@ const AiAsk = {
           'gateway logs mentioning timeout => {service="gateway"} |= "timeout"',
         ],
         promql: [
-          'request duration for gateway => http_request_duration_ms{service="gateway"}',
+          'request duration for inventory => http_request_duration_ms{service="inventory"}',
+          'request rate for gateway over 5 minutes => rate(http_request_duration_ms{service="gateway"}[5m])',
           'all values of stock_level => stock_level',
         ],
         traceql: [
