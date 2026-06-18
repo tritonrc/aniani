@@ -57,6 +57,7 @@ async fn asset(Path(file): Path<String>) -> Response {
 pub fn routes() -> Router<SharedState> {
     Router::new()
         .route("/ui", get(index))
+        .route("/ui/", get(index))
         .route("/ui/assets/{file}", get(asset))
 }
 
@@ -101,6 +102,14 @@ mod tests {
         assert!(ct.to_str().unwrap().starts_with("text/html"));
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         assert!(!body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_index_served_with_trailing_slash() {
+        let resp = get_resp("/ui/").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp.headers().get(header::CONTENT_TYPE).unwrap();
+        assert!(ct.to_str().unwrap().starts_with("text/html"));
     }
 
     #[tokio::test]
