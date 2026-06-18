@@ -33,8 +33,12 @@ const vocab = reactive({
   catalog: {},      // { [service]: { metrics: [], log_labels: [] } }
 })
 async function loadVocab() {
-  try { const s = await apiGet('/api/v1/services'); vocab.services = (s.data && s.data.services) || [] } catch (_) {}
-  try { const m = await apiGet('/api/v1/label/__name__/values'); vocab.metricNames = m.data || [] } catch (_) {}
+  const [s, m] = await Promise.allSettled([
+    apiGet('/api/v1/services'),
+    apiGet('/api/v1/label/__name__/values'),
+  ])
+  if (s.status === 'fulfilled') vocab.services = (s.value.data && s.value.data.services) || []
+  if (m.status === 'fulfilled') vocab.metricNames = m.value.data || []
 }
 async function loadCatalog(service) {
   if (!service) return null
@@ -157,7 +161,8 @@ const AiAsk = {
           initialPrompts: [{ role: 'system', content: this.systemPrompt() }],
         })
         let out = (await session.prompt(this.text)).trim()
-        out = out.replace(/^```[a-z]*\n?/i, '').replace(/```$/, '').trim()
+        const fenceMatch = out.match(/```[a-z]*\n?([\s\S]*?)```/i)
+        out = (fenceMatch ? fenceMatch[1] : out).trim()
         session.destroy && session.destroy()
         this.state = 'available'
         this.status = ''
@@ -280,7 +285,7 @@ const Metrics = {
         <button type="submit" :disabled="loading">Run</button>
       </form>
       <ai-ask :lang="'promql'" @query="onAi"></ai-ask>
-      <div class="picker">
+      <div class="picker" v-if="metricServices.length">
         <span class="picker-label">Service:</span>
         <select class="svc-select" v-model="service" @change="onService">
           <option value="">All services</option>
