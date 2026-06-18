@@ -215,6 +215,24 @@ GET    /ready                   — health check (200 when ready)
 
 ---
 
+## Web UI
+
+Aniani ships an optional embedded web UI for reviewing logs, metrics, and traces.
+It is compiled in by default — browse to:
+
+    http://127.0.0.1:4320/ui
+
+Tabs: **Overview** (services + status), **Logs** (LogQL), **Metrics** (PromQL),
+and **Traces** (TraceQL). Enter a query and hit **Run**; in Traces, click a row to
+drill into its spans.
+
+The UI loads Vue from a CDN, so the **first page load needs internet access**.
+To build without the UI (smaller binary, no embedded assets):
+
+    cargo build --release --no-default-features
+
+---
+
 ## Snapshots
 
 Useful when an agent needs to hand off state to a new session:
