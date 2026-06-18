@@ -64,7 +64,78 @@ const Landing = {
 }
 
 // Placeholder components replaced in Tasks 4-6.
-const Logs = { template: `<section class="view"><h2>Logs</h2></section>` }
+const Logs = {
+  template: `
+    <section class="view">
+      <h2>Logs</h2>
+      <form class="query-bar" @submit.prevent="run">
+        <input
+          v-model="query"
+          placeholder='{service="my-service"}'
+          spellcheck="false"
+          autocapitalize="off"
+        />
+        <button type="submit" :disabled="loading">Run</button>
+      </form>
+      <p v-if="error" class="error">{{ error }}</p>
+      <p v-if="loading" class="muted">Loading…</p>
+      <table v-if="rows.length" class="results">
+        <thead><tr><th>Time</th><th>Labels</th><th>Line</th></tr></thead>
+        <tbody>
+          <tr v-for="(r, i) in rows" :key="i">
+            <td class="ts">{{ r.time }}</td>
+            <td class="labels">{{ r.labels }}</td>
+            <td class="line">{{ r.line }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else-if="ran && !loading && !error" class="muted">No log lines matched.</p>
+    </section>
+  `,
+  data() {
+    return { query: '', rows: [], error: '', loading: false, ran: false }
+  },
+  methods: {
+    async run() {
+      this.error = ''
+      this.loading = true
+      this.ran = true
+      this.rows = []
+      try {
+        const endNs = String(Date.now() * 1_000_000)
+        const startNs = String(window.__aniani.hourAgoMs() * 1_000_000)
+        const url =
+          '/loki/api/v1/query_range?query=' +
+          encodeURIComponent(this.query) +
+          '&start=' + startNs +
+          '&end=' + endNs +
+          '&limit=200'
+        const res = await window.__aniani.apiGet(url)
+        const result = (res.data && res.data.result) || []
+        const rows = []
+        for (const stream of result) {
+          const labels = Object.entries(stream.stream || {})
+            .map(([k, v]) => k + '=' + v)
+            .join(' ')
+          for (const [tsNs, line] of stream.values || []) {
+            rows.push({
+              tsNs: Number(tsNs),
+              time: new Date(Number(tsNs) / 1_000_000).toISOString(),
+              labels,
+              line,
+            })
+          }
+        }
+        rows.sort((a, b) => b.tsNs - a.tsNs)
+        this.rows = rows
+      } catch (e) {
+        this.error = e.message
+      } finally {
+        this.loading = false
+      }
+    },
+  },
+}
 const Metrics = { template: `<section class="view"><h2>Metrics</h2></section>` }
 const Traces = { template: `<section class="view"><h2>Traces</h2></section>` }
 
