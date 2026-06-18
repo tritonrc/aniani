@@ -208,7 +208,86 @@ const Metrics = {
     },
   },
 }
-const Traces = { template: `<section class="view"><h2>Traces</h2></section>` }
+const Traces = {
+  template: `
+    <section class="view">
+      <h2>Traces</h2>
+      <form class="query-bar" @submit.prevent="run">
+        <input
+          v-model="query"
+          placeholder='{ .service.name = "my-service" }'
+          spellcheck="false"
+          autocapitalize="off"
+        />
+        <button type="submit" :disabled="loading">Run</button>
+      </form>
+      <p v-if="error" class="error">{{ error }}</p>
+      <p v-if="loading" class="muted">Loading…</p>
+      <table v-if="traces.length" class="results">
+        <thead><tr><th>Trace ID</th><th>Root service</th><th>Duration (ms)</th></tr></thead>
+        <tbody>
+          <tr v-for="t in traces" :key="t.traceID" @click="open(t.traceID)" class="clickable">
+            <td class="mono">{{ t.traceID }}</td>
+            <td>{{ t.rootServiceName }}</td>
+            <td class="value">{{ t.durationMs }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else-if="ran && !loading && !error" class="muted">No traces matched.</p>
+      <div v-if="selected" class="detail">
+        <h3>Trace {{ selectedId }}</h3>
+        <p v-if="detailError" class="error">{{ detailError }}</p>
+        <pre class="json" v-else>{{ pretty(selected) }}</pre>
+      </div>
+    </section>
+  `,
+  data() {
+    return {
+      query: '',
+      traces: [],
+      error: '',
+      loading: false,
+      ran: false,
+      selected: null,
+      selectedId: '',
+      detailError: '',
+    }
+  },
+  methods: {
+    pretty(v) {
+      return JSON.stringify(v, null, 2)
+    },
+    async run() {
+      this.error = ''
+      this.loading = true
+      this.ran = true
+      this.traces = []
+      this.selected = null
+      try {
+        const url =
+          '/api/search?q=' + encodeURIComponent(this.query) + '&limit=20'
+        const res = await window.__aniani.apiGet(url)
+        this.traces = res.traces || []
+      } catch (e) {
+        this.error = e.message
+      } finally {
+        this.loading = false
+      }
+    },
+    async open(id) {
+      this.detailError = ''
+      this.selectedId = id
+      this.selected = null
+      try {
+        this.selected = await window.__aniani.apiGet(
+          '/api/traces/' + encodeURIComponent(id),
+        )
+      } catch (e) {
+        this.detailError = e.message
+      }
+    },
+  },
+}
 
 const App = {
   components: { Landing, Logs, Metrics, Traces },
