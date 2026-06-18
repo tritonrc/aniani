@@ -136,7 +136,78 @@ const Logs = {
     },
   },
 }
-const Metrics = { template: `<section class="view"><h2>Metrics</h2></section>` }
+const Metrics = {
+  template: `
+    <section class="view">
+      <h2>Metrics</h2>
+      <form class="query-bar" @submit.prevent="run">
+        <input
+          v-model="query"
+          placeholder="rate(http_requests_total[5m])"
+          spellcheck="false"
+          autocapitalize="off"
+        />
+        <button type="submit" :disabled="loading">Run</button>
+      </form>
+      <p v-if="error" class="error">{{ error }}</p>
+      <p v-if="loading" class="muted">Loading…</p>
+      <table v-if="rows.length" class="results">
+        <thead><tr><th>Series</th><th>Latest value</th></tr></thead>
+        <tbody>
+          <tr v-for="(r, i) in rows" :key="i">
+            <td class="labels">{{ r.series }}</td>
+            <td class="value">{{ r.value }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else-if="ran && !loading && !error" class="muted">No series matched.</p>
+    </section>
+  `,
+  data() {
+    return { query: '', rows: [], error: '', loading: false, ran: false }
+  },
+  methods: {
+    seriesLabel(metric) {
+      const name = metric.__name__ || ''
+      const labels = Object.entries(metric)
+        .filter(([k]) => k !== '__name__')
+        .map(([k, v]) => k + '="' + v + '"')
+        .join(', ')
+      return labels ? name + '{' + labels + '}' : name
+    },
+    async run() {
+      this.error = ''
+      this.loading = true
+      this.ran = true
+      this.rows = []
+      try {
+        const endSec = Math.floor(Date.now() / 1000)
+        const startSec = Math.floor(window.__aniani.hourAgoMs() / 1000)
+        const url =
+          '/api/v1/query_range?query=' +
+          encodeURIComponent(this.query) +
+          '&start=' + startSec +
+          '&end=' + endSec +
+          '&step=60'
+        const res = await window.__aniani.apiGet(url)
+        const result = (res.data && res.data.result) || []
+        this.rows = result.map((s) => {
+          let value = ''
+          if (Array.isArray(s.values) && s.values.length) {
+            value = s.values[s.values.length - 1][1] // matrix: last sample
+          } else if (Array.isArray(s.value)) {
+            value = s.value[1] // vector: single sample
+          }
+          return { series: this.seriesLabel(s.metric || {}), value }
+        })
+      } catch (e) {
+        this.error = e.message
+      } finally {
+        this.loading = false
+      }
+    },
+  },
+}
 const Traces = { template: `<section class="view"><h2>Traces</h2></section>` }
 
 const App = {
