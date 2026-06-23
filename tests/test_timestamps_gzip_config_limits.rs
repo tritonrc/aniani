@@ -430,7 +430,9 @@ fn test_trace_store_status_index() {
             start_time_ns: 1_000,
             duration_ns: 100,
             status: aniani::store::trace_store::SpanStatus::Ok,
+            kind: aniani::store::trace_store::SpanKind::Unspecified,
             attributes: smallvec::SmallVec::new(),
+            events: Vec::new(),
         },
         aniani::store::trace_store::Span {
             trace_id: error_trace_id_a,
@@ -441,7 +443,9 @@ fn test_trace_store_status_index() {
             start_time_ns: 2_000,
             duration_ns: 100,
             status: aniani::store::trace_store::SpanStatus::Error,
+            kind: aniani::store::trace_store::SpanKind::Unspecified,
             attributes: smallvec::SmallVec::new(),
+            events: Vec::new(),
         },
         aniani::store::trace_store::Span {
             trace_id: error_trace_id_b,
@@ -452,7 +456,9 @@ fn test_trace_store_status_index() {
             start_time_ns: 3_000,
             duration_ns: 100,
             status: aniani::store::trace_store::SpanStatus::Error,
+            kind: aniani::store::trace_store::SpanKind::Unspecified,
             attributes: smallvec::SmallVec::new(),
+            events: Vec::new(),
         },
         aniani::store::trace_store::Span {
             trace_id: unset_trace_id,
@@ -463,7 +469,9 @@ fn test_trace_store_status_index() {
             start_time_ns: 4_000,
             duration_ns: 100,
             status: aniani::store::trace_store::SpanStatus::Unset,
+            kind: aniani::store::trace_store::SpanKind::Unspecified,
             attributes: smallvec::SmallVec::new(),
+            events: Vec::new(),
         },
     ]);
 

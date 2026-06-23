@@ -16,7 +16,7 @@ use smallvec::SmallVec;
 use super::label::extract_resource_labels;
 use super::{decode_body, is_json_content_type, u64_to_i64_saturating};
 use crate::store::SharedState;
-use crate::store::trace_store::{AttributeValue, Span, SpanStatus};
+use crate::store::trace_store::{AttributeValue, Span, SpanEvent, SpanKind, SpanStatus};
 
 #[derive(Debug, Clone)]
 enum PreparedAttributeValue {
@@ -24,6 +24,13 @@ enum PreparedAttributeValue {
     Int(i64),
     Float(f64),
     Bool(bool),
+}
+
+#[derive(Debug, Clone)]
+struct PreparedEvent {
+    name: String,
+    time_ns: i64,
+    attributes: SmallVec<[(String, PreparedAttributeValue); 4]>,
 }
 
 #[derive(Debug, Clone)]
@@ -36,7 +43,9 @@ struct PreparedSpan {
     start_time_ns: i64,
     duration_ns: i64,
     status: SpanStatus,
+    kind: SpanKind,
     attributes: SmallVec<[(String, PreparedAttributeValue); 8]>,
+    events: Vec<PreparedEvent>,
 }
 
 /// Handler for POST /v1/traces.
@@ -140,6 +149,7 @@ pub async fn traces_handler(
                 let start_time_ns = u64_to_i64_saturating(otlp_span.start_time_unix_nano);
                 let end_time_ns = u64_to_i64_saturating(otlp_span.end_time_unix_nano);
                 let duration_ns = end_time_ns.saturating_sub(start_time_ns);
+                let kind = SpanKind::from_otlp(otlp_span.kind);
 
                 let mut attributes = resource_attrs.clone();
 
@@ -153,6 +163,29 @@ pub async fn traces_handler(
                     }
                 }
 
+                // Span events (timeline markers; exceptions arrive here). Event
+                // attribute keys are kept raw — they are already namespaced
+                // (e.g. `exception.message`) and the UI matches on them.
+                let events: Vec<PreparedEvent> = otlp_span
+                    .events
+                    .iter()
+                    .map(|ev| {
+                        let attributes = ev
+                            .attributes
+                            .iter()
+                            .filter_map(|attr| {
+                                let av = convert_any_value(attr.value.as_ref()?)?;
+                                Some((attr.key.clone(), av))
+                            })
+                            .collect();
+                        PreparedEvent {
+                            name: ev.name.clone(),
+                            time_ns: u64_to_i64_saturating(ev.time_unix_nano),
+                            attributes,
+                        }
+                    })
+                    .collect();
+
                 trace_ids.insert(trace_id);
                 spans.push(PreparedSpan {
                     trace_id,
@@ -163,7 +196,9 @@ pub async fn traces_handler(
                     start_time_ns,
                     duration_ns,
                     status,
+                    kind,
                     attributes,
+                    events,
                 });
             }
 
@@ -208,17 +243,20 @@ fn intern_prepared_span(store: &mut crate::store::TraceStore, prepared: Prepared
     let attributes = prepared
         .attributes
         .into_iter()
-        .map(|(key, value)| {
-            let key = store.interner.get_or_intern(key);
-            let value = match value {
-                PreparedAttributeValue::String(s) => {
-                    AttributeValue::String(store.interner.get_or_intern(s))
-                }
-                PreparedAttributeValue::Int(i) => AttributeValue::Int(i),
-                PreparedAttributeValue::Float(f) => AttributeValue::Float(f),
-                PreparedAttributeValue::Bool(b) => AttributeValue::Bool(b),
-            };
-            (key, value)
+        .map(|(key, value)| intern_attribute(store, key, value))
+        .collect();
+
+    let events = prepared
+        .events
+        .into_iter()
+        .map(|ev| SpanEvent {
+            name: store.interner.get_or_intern(&ev.name),
+            time_ns: ev.time_ns,
+            attributes: ev
+                .attributes
+                .into_iter()
+                .map(|(key, value)| intern_attribute(store, key, value))
+                .collect(),
         })
         .collect();
 
@@ -231,6 +269,26 @@ fn intern_prepared_span(store: &mut crate::store::TraceStore, prepared: Prepared
         start_time_ns: prepared.start_time_ns,
         duration_ns: prepared.duration_ns,
         status: prepared.status,
+        kind: prepared.kind,
         attributes,
+        events,
     }
+}
+
+/// Intern a single prepared attribute key/value pair against the store.
+fn intern_attribute(
+    store: &mut crate::store::TraceStore,
+    key: String,
+    value: PreparedAttributeValue,
+) -> (lasso::Spur, AttributeValue) {
+    let key = store.interner.get_or_intern(key);
+    let value = match value {
+        PreparedAttributeValue::String(s) => {
+            AttributeValue::String(store.interner.get_or_intern(s))
+        }
+        PreparedAttributeValue::Int(i) => AttributeValue::Int(i),
+        PreparedAttributeValue::Float(f) => AttributeValue::Float(f),
+        PreparedAttributeValue::Bool(b) => AttributeValue::Bool(b),
+    };
+    (key, value)
 }

@@ -482,7 +482,7 @@ fn span_to_matched(span: &Span, store: &TraceStore) -> MatchedSpan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::trace_store::{AttributeValue, Span, SpanStatus};
+    use crate::store::trace_store::{AttributeValue, Span, SpanKind, SpanStatus};
     use smallvec::SmallVec;
 
     fn make_store() -> TraceStore {
@@ -513,6 +513,8 @@ mod tests {
                 res_svc_key,
                 AttributeValue::String(gateway_val),
             )]),
+            kind: SpanKind::Unspecified,
+            events: Vec::new(),
         };
         let span2 = Span {
             trace_id: tid1,
@@ -527,6 +529,8 @@ mod tests {
                 res_svc_key,
                 AttributeValue::String(payments_val),
             )]),
+            kind: SpanKind::Unspecified,
+            events: Vec::new(),
         };
 
         // Trace 2: slow span
@@ -544,6 +548,8 @@ mod tests {
                 res_svc_key,
                 AttributeValue::String(payments_val),
             )]),
+            kind: SpanKind::Unspecified,
+            events: Vec::new(),
         };
 
         store.ingest_spans(vec![span1, span2, span3]);
