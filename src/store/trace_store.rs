@@ -15,6 +15,45 @@ pub enum SpanStatus {
     Error,
 }
 
+/// The role a span plays in a trace, mirroring OTLP `SpanKind`.
+///
+/// Used by the UI to render Jaeger-style CLIENT/SERVER annotations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SpanKind {
+    Unspecified,
+    Internal,
+    Server,
+    Client,
+    Producer,
+    Consumer,
+}
+
+impl SpanKind {
+    /// Map an OTLP `kind` integer to a `SpanKind`. Unknown values map to `Unspecified`.
+    pub fn from_otlp(code: i32) -> Self {
+        match code {
+            1 => SpanKind::Internal,
+            2 => SpanKind::Server,
+            3 => SpanKind::Client,
+            4 => SpanKind::Producer,
+            5 => SpanKind::Consumer,
+            _ => SpanKind::Unspecified,
+        }
+    }
+
+    /// The OTLP integer code for this kind.
+    pub fn as_otlp(self) -> i32 {
+        match self {
+            SpanKind::Unspecified => 0,
+            SpanKind::Internal => 1,
+            SpanKind::Server => 2,
+            SpanKind::Client => 3,
+            SpanKind::Producer => 4,
+            SpanKind::Consumer => 5,
+        }
+    }
+}
+
 /// Attribute value types.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AttributeValue {
@@ -22,6 +61,17 @@ pub enum AttributeValue {
     Int(i64),
     Float(f64),
     Bool(bool),
+}
+
+/// A timestamped event recorded on a span.
+///
+/// OTLP exceptions arrive as events named `exception` carrying
+/// `exception.type` / `exception.message` / `exception.stacktrace` attributes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpanEvent {
+    pub name: Spur,
+    pub time_ns: i64,
+    pub attributes: SmallVec<[(Spur, AttributeValue); 4]>,
 }
 
 /// A trace span.
@@ -35,7 +85,9 @@ pub struct Span {
     pub start_time_ns: i64,
     pub duration_ns: i64,
     pub status: SpanStatus,
+    pub kind: SpanKind,
     pub attributes: SmallVec<[(Spur, AttributeValue); 8]>,
+    pub events: Vec<SpanEvent>,
 }
 
 /// Result of a trace search.
@@ -338,12 +390,17 @@ impl TraceStore {
     pub fn memory_estimate_bytes(&self) -> usize {
         let mut bytes = 0usize;
 
-        // Per-trace: Vec<Span> and each span's attributes
+        // Per-trace: Vec<Span> and each span's attributes and events
         for spans in self.traces.values() {
             bytes += spans.capacity() * std::mem::size_of::<Span>();
             for span in spans {
                 // Attribute key/value pairs stored in SmallVec
                 bytes += span.attributes.len() * std::mem::size_of::<(Spur, AttributeValue)>();
+                // Span events: the heap Vec of SpanEvent plus each event's attributes
+                bytes += span.events.capacity() * std::mem::size_of::<SpanEvent>();
+                for event in &span.events {
+                    bytes += event.attributes.len() * std::mem::size_of::<(Spur, AttributeValue)>();
+                }
             }
         }
 
@@ -407,7 +464,9 @@ mod tests {
             start_time_ns: start,
             duration_ns: duration,
             status,
+            kind: SpanKind::Unspecified,
             attributes: SmallVec::new(),
+            events: Vec::new(),
         }
     }
 
@@ -701,7 +760,9 @@ mod tests {
                 start_time_ns: 1000,
                 duration_ns: 100,
                 status: SpanStatus::Ok,
+                kind: SpanKind::Unspecified,
                 attributes: SmallVec::new(),
+                events: Vec::new(),
             },
             Span {
                 trace_id,
@@ -712,7 +773,9 @@ mod tests {
                 start_time_ns: 1050,
                 duration_ns: 50,
                 status: SpanStatus::Ok,
+                kind: SpanKind::Unspecified,
                 attributes: SmallVec::new(),
+                events: Vec::new(),
             },
         ]);
 
@@ -754,7 +817,9 @@ mod tests {
                 start_time_ns: 100,
                 duration_ns: 10,
                 status: SpanStatus::Error,
+                kind: SpanKind::Unspecified,
                 attributes: SmallVec::new(),
+                events: Vec::new(),
             },
             Span {
                 trace_id,
@@ -765,7 +830,9 @@ mod tests {
                 start_time_ns: 1000,
                 duration_ns: 10,
                 status: SpanStatus::Ok,
+                kind: SpanKind::Unspecified,
                 attributes: SmallVec::new(),
+                events: Vec::new(),
             },
         ]);
 

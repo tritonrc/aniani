@@ -223,8 +223,21 @@ It is compiled in by default — browse to:
     http://127.0.0.1:4320/ui
 
 Tabs: **Overview** (services + status), **Logs** (LogQL), **Metrics** (PromQL),
-and **Traces** (TraceQL). Enter a query and hit **Run**; in Traces, click a row to
-drill into its spans.
+and **Traces** (TraceQL). Enter a query and hit **Run**.
+
+In **Traces**, click a result row to open a Jaeger-style waterfall: spans laid out
+over a shared timeline, colored per service, in a collapsible parent/child tree.
+Click any span to expand its detail — tags, process (resource) attributes, and a
+timeline of events, with recorded **exceptions** surfaced (type, message, and
+stack trace). The summary line shows total duration, span count, services, and
+error count.
+
+To populate a local instance with a realistic, multi-service trace set (a
+checkout fanning out across seven services, including one failing trace with an
+exception) plus a little logs/metrics:
+
+    cargo run --example seed                 # targets http://127.0.0.1:4320
+    cargo run --example seed -- http://host:port
 
 The UI loads Vue from a CDN, so the **first page load needs internet access**.
 To build without the UI (smaller binary, no embedded assets):

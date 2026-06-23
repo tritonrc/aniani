@@ -10,7 +10,8 @@ use serde_json::{Value, json};
 use super::eval::evaluate_traceql;
 use super::parser::parse_traceql;
 use crate::store::SharedState;
-use crate::store::trace_store::SpanStatus;
+use crate::store::TraceStore;
+use crate::store::trace_store::{AttributeValue, SpanStatus};
 
 /// Hint included in TraceQL parse error responses to help agents construct valid queries.
 const TRACEQL_HINT: &str = "Example: { resource.service.name = \"myapp\" && status = error }";
@@ -210,12 +211,22 @@ pub async fn get_trace(
                 let attrs: Vec<Value> = span
                     .attributes
                     .iter()
-                    .map(|(k, v)| {
+                    .map(|(k, v)| attribute_json(&store, k, v))
+                    .collect();
+
+                let events: Vec<Value> = span
+                    .events
+                    .iter()
+                    .map(|ev| {
+                        let ev_attrs: Vec<Value> = ev
+                            .attributes
+                            .iter()
+                            .map(|(k, v)| attribute_json(&store, k, v))
+                            .collect();
                         json!({
-                            "key": store.resolve(k),
-                            "value": {
-                                "stringValue": store.resolve_attribute_value(v),
-                            }
+                            "name": store.resolve(&ev.name),
+                            "timeUnixNano": ev.time_ns.to_string(),
+                            "attributes": ev_attrs,
                         })
                     })
                     .collect();
@@ -225,7 +236,7 @@ pub async fn get_trace(
                     "spanId": hex_encode(&span.span_id),
                     "parentSpanId": span.parent_span_id.as_ref().map(|p| hex_encode(p)).unwrap_or_default(),
                     "name": store.resolve(&span.name),
-                    "kind": 1,
+                    "kind": span.kind.as_otlp(),
                     "startTimeUnixNano": span.start_time_ns.to_string(),
                     "endTimeUnixNano": span.start_time_ns.saturating_add(span.duration_ns).to_string(),
                     "status": {
@@ -236,6 +247,7 @@ pub async fn get_trace(
                         }
                     },
                     "attributes": attrs,
+                    "events": events,
                 });
 
                 if !service_spans.contains_key(&service_name) {
@@ -276,6 +288,20 @@ pub async fn get_trace(
             Json(json!({"error": "trace not found"})),
         ),
     }
+}
+
+/// Render a single interned attribute as an OTLP-shaped `{key, value}` JSON object.
+///
+/// All values are emitted under `stringValue` (typed Int/Float/Bool are
+/// stringified). This is intentional and matches the long-standing span-attribute
+/// shape the web UI consumes; the typed value is preserved losslessly in the store.
+fn attribute_json(store: &TraceStore, key: &lasso::Spur, value: &AttributeValue) -> Value {
+    json!({
+        "key": store.resolve(key),
+        "value": {
+            "stringValue": store.resolve_attribute_value(value),
+        }
+    })
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
