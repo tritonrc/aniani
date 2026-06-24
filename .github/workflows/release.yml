@@ -21,6 +21,9 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             artifact: aniani-macos-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: aniani-windows-x86_64
 
     steps:
       - uses: actions/checkout@v4
@@ -43,20 +46,32 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
           tar czf ../../../${{ matrix.artifact }}.tar.gz aniani
           cd ../../..
           shasum -a 256 ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
 
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path target/${{ matrix.target }}/release/aniani.exe -DestinationPath ${{ matrix.artifact }}.zip
+          $hash = (Get-FileHash -Algorithm SHA256 ${{ matrix.artifact }}.zip).Hash.ToLower()
+          "$hash  ${{ matrix.artifact }}.zip" | Out-File -Encoding ascii ${{ matrix.artifact }}.zip.sha256
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
+          if-no-files-found: ignore
           path: |
             ${{ matrix.artifact }}.tar.gz
             ${{ matrix.artifact }}.tar.gz.sha256
+            ${{ matrix.artifact }}.zip
+            ${{ matrix.artifact }}.zip.sha256
 
   release:
     name: Publish Release
@@ -81,4 +96,5 @@ jobs:
             --title "Aniani ${{ github.ref_name }}" \
             --generate-notes \
             artifacts/*.tar.gz \
+            artifacts/*.zip \
             artifacts/*.sha256

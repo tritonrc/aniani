@@ -390,8 +390,15 @@ A background task runs on a configurable interval (default 30s):
 
 ### Snapshot Manager
 
+Snapshots are triggered three ways: the auto-snapshot timer (`--snapshot-interval`),
+on graceful shutdown, and on demand. The on-demand trigger is `POST /api/v1/snapshot`
+(cross-platform) and, on Unix, also `SIGUSR1`. Windows has no `SIGUSR1`, so the HTTP
+endpoint is the portable trigger there; the shutdown snapshot on Windows additionally
+fires for console-close, logoff, and system-shutdown events (each with only a brief
+OS grace window).
+
 ```rust
-// On SIGUSR1 or timer:
+// On POST /api/v1/snapshot, SIGUSR1 (Unix), or timer:
 let snapshot = Snapshot {
     logs: store.logs.read().clone(),
     metrics: store.metrics.read().clone(),
