@@ -18,7 +18,10 @@ async fn test_e2e_otlp_to_aniani() {
         config: aniani::config::Config {
             port: 0,
             bind_address: "127.0.0.1".into(),
-            snapshot_dir: "/tmp/aniani-e2e".into(),
+            snapshot_dir: std::env::temp_dir()
+                .join("aniani-e2e")
+                .to_string_lossy()
+                .into_owned(),
             snapshot_interval: 0,
             max_log_entries: 100_000,
             max_series: 10_000,

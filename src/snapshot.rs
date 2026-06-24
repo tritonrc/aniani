@@ -9,6 +9,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::store::{LogStore, MetricStore, TraceStore};
 
+/// Serializes snapshot writes so concurrent triggers — the `POST /api/v1/snapshot`
+/// endpoint, the periodic timer, the Unix `SIGUSR1` handler, and graceful
+/// shutdown — never race on the shared `aniani.snap.tmp` path or briefly publish a
+/// partially written `aniani.snap`. The guard is held only across synchronous disk
+/// I/O (never across an `.await`), and `parking_lot::Mutex` is not poisoned on panic.
+static SNAPSHOT_WRITE_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
 /// Snapshot data containing all three stores.
 #[derive(Serialize, Deserialize)]
 pub struct Snapshot {
@@ -18,12 +25,13 @@ pub struct Snapshot {
 }
 
 /// Save a snapshot of all stores to disk (clones each store internally).
+/// Returns the number of bytes written.
 pub fn save_snapshot(
     log_store: &LogStore,
     metric_store: &MetricStore,
     trace_store: &TraceStore,
     dir: &Path,
-) -> Result<()> {
+) -> Result<usize> {
     save_snapshot_owned(
         log_store.clone(),
         metric_store.clone(),
@@ -33,12 +41,17 @@ pub fn save_snapshot(
 }
 
 /// Save a snapshot from already-owned (cloned) stores.
+/// Returns the number of bytes written.
 pub fn save_snapshot_owned(
     log_store: LogStore,
     metric_store: MetricStore,
     trace_store: TraceStore,
     dir: &Path,
-) -> Result<()> {
+) -> Result<usize> {
+    // Serialize all writers: the remove/create_new/write/rename sequence below is
+    // not safe to run concurrently against a shared temp path.
+    let _write_guard = SNAPSHOT_WRITE_LOCK.lock();
+
     fs::create_dir_all(dir)?;
 
     let snapshot = Snapshot {
@@ -69,7 +82,7 @@ pub fn save_snapshot_owned(
         bytes.len(),
         final_path.display()
     );
-    Ok(())
+    Ok(bytes.len())
 }
 
 /// Load a snapshot from disk.
@@ -92,21 +105,24 @@ pub fn load_snapshot(dir: &Path) -> Result<(LogStore, MetricStore, TraceStore)> 
     ))
 }
 
-/// Clone all stores and save a snapshot. Acquires read locks briefly to clone,
-/// then writes to disk without holding any locks.
-pub fn save_from_state(state: &crate::store::AppState, dir: &std::path::Path) {
-    let snapshot = Snapshot {
-        log_store: state.log_store.read().clone(),
-        metric_store: state.metric_store.read().clone(),
-        trace_store: state.trace_store.read().clone(),
-    };
+/// Clone all stores and save a snapshot, returning the number of bytes written.
+/// Acquires read locks briefly to clone, then writes to disk without holding any
+/// locks. Used by the cross-platform `POST /api/v1/snapshot` endpoint, which needs
+/// to surface success/failure to the caller.
+pub fn save_from_state_reported(
+    state: &crate::store::AppState,
+    dir: &std::path::Path,
+) -> Result<usize> {
+    let log_store = state.log_store.read().clone();
+    let metric_store = state.metric_store.read().clone();
+    let trace_store = state.trace_store.read().clone();
+    save_snapshot_owned(log_store, metric_store, trace_store, dir)
+}
 
-    if let Err(e) = save_snapshot_owned(
-        snapshot.log_store,
-        snapshot.metric_store,
-        snapshot.trace_store,
-        dir,
-    ) {
+/// Fire-and-forget snapshot used by the periodic timer, the Unix SIGUSR1 handler,
+/// and graceful shutdown. Errors are logged rather than propagated.
+pub fn save_from_state(state: &crate::store::AppState, dir: &std::path::Path) {
+    if let Err(e) = save_from_state_reported(state, dir) {
         tracing::error!("snapshot failed: {}", e);
     }
 }

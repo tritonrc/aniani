@@ -7,5 +7,6 @@ pub mod metadata;
 pub mod openapi;
 pub mod reset;
 pub mod services;
+pub mod snapshot;
 pub mod status;
 pub mod summary;

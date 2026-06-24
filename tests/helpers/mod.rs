@@ -26,7 +26,10 @@ pub fn make_state() -> aniani::store::SharedState {
         config: aniani::config::Config {
             port: 0,
             bind_address: "127.0.0.1".into(),
-            snapshot_dir: "/tmp/aniani-test".into(),
+            snapshot_dir: std::env::temp_dir()
+                .join("aniani-test")
+                .to_string_lossy()
+                .into_owned(),
             snapshot_interval: 0,
             max_log_entries: 100000,
             max_series: 10000,

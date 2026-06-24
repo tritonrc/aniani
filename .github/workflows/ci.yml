@@ -11,8 +11,12 @@ env:
 
 jobs:
   test:
-    name: Test
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -31,11 +35,14 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
+      # Formatting and lints are platform-independent; run them once on Linux.
       - name: Check formatting
+        if: runner.os == 'Linux'
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        if: runner.os == 'Linux'
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Test
         run: cargo test

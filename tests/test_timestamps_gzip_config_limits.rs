@@ -19,7 +19,7 @@ fn test_config_default_bind_address() {
     let config = aniani::config::Config {
         port: 4320,
         bind_address: "127.0.0.1".into(),
-        snapshot_dir: "/tmp".into(),
+        snapshot_dir: std::env::temp_dir().to_string_lossy().into_owned(),
         snapshot_interval: 0,
         max_log_entries: 100000,
         max_series: 10000,
@@ -256,7 +256,10 @@ async fn test_max_spans_enforced() {
         config: aniani::config::Config {
             port: 0,
             bind_address: "127.0.0.1".into(),
-            snapshot_dir: "/tmp/aniani-test".into(),
+            snapshot_dir: std::env::temp_dir()
+                .join("aniani-test")
+                .to_string_lossy()
+                .into_owned(),
             snapshot_interval: 0,
             max_log_entries: 100000,
             max_series: 10000,
@@ -512,7 +515,10 @@ fn test_max_series_limits_unique_series() {
         config: aniani::config::Config {
             port: 0,
             bind_address: "127.0.0.1".into(),
-            snapshot_dir: "/tmp/aniani-test".into(),
+            snapshot_dir: std::env::temp_dir()
+                .join("aniani-test")
+                .to_string_lossy()
+                .into_owned(),
             snapshot_interval: 0,
             max_log_entries: 100_000,
             max_series: 2,

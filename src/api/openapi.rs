@@ -397,6 +397,20 @@ fn spec() -> Value {
         }),
     );
     paths.insert(
+        "/api/v1/snapshot".into(),
+        json!({
+            "post": {
+                "summary": "Write a snapshot of all stores to the configured snapshot directory",
+                "description": "Cross-platform on-demand snapshot trigger (the portable equivalent of the Unix-only SIGUSR1 signal). Returns the number of bytes written.",
+                "tags": ["management"],
+                "responses": {
+                    "200": { "description": "Snapshot written", "content": { "application/json": {} } },
+                    "500": { "description": "Snapshot failed" }
+                }
+            }
+        }),
+    );
+    paths.insert(
         "/api/v1/metadata".into(),
         simple_get("Get metric metadata", "promql"),
     );
@@ -562,6 +576,7 @@ mod tests {
             "/api/v1/catalog",
             "/api/v1/summary",
             "/api/v1/reset",
+            "/api/v1/snapshot",
             "/api/v1/metadata",
             "/api/v1/openapi.json",
             "/ready",

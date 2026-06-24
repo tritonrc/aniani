@@ -47,7 +47,18 @@ curl -L https://github.com/tritonrc/aniani/releases/latest/download/aniani-linux
 chmod +x aniani && mv aniani /usr/local/bin/
 ```
 
-Or build from source:
+On Windows (x86_64), download `aniani-windows-x86_64.zip` from
+[Releases](https://github.com/tritonrc/aniani/releases) and extract it (no
+`chmod` needed); add the folder to your `PATH` or run `aniani.exe` directly:
+
+```powershell
+# PowerShell
+Invoke-WebRequest -Uri https://github.com/tritonrc/aniani/releases/latest/download/aniani-windows-x86_64.zip -OutFile aniani.zip
+Expand-Archive aniani.zip -DestinationPath .
+.\aniani.exe --port 4320
+```
+
+Or build from source on any platform:
 
 ```bash
 cargo build --release
@@ -78,6 +89,16 @@ For parallel worktrees, derive the port from the worktree name to avoid conflict
 PORT=$(( ($(basename $(git rev-parse --show-toplevel) | cksum | cut -d' ' -f1) % 1000) + 4000 ))
 aniani --port $PORT --retention 2h &
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:$PORT
+```
+
+The boot and port-derivation snippets above are Unix shell examples. On Windows,
+the equivalent in PowerShell:
+
+```powershell
+$name = Split-Path -Leaf (git rev-parse --show-toplevel)
+$port = ([System.BitConverter]::ToUInt32([System.Security.Cryptography.MD5]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($name)), 0) % 1000) + 4000
+Start-Process aniani.exe -ArgumentList "--port", $port, "--retention", "2h"
+$env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:$port"
 ```
 
 To listen on all interfaces (e.g. when running in a container or accepting traffic from other hosts):
@@ -208,6 +229,7 @@ GET    /api/v1/diagnose?service=X — health assessment with suggested queries
 GET    /api/v1/catalog?service=X  — metric names, log labels, span attributes
 GET    /api/v1/summary?service=X  — all errors for a service across signals
 DELETE /api/v1/reset            — clear all stores (or ?service=X for one service)
+POST   /api/v1/snapshot         — write a snapshot now (cross-platform; portable SIGUSR1 equivalent)
 GET    /api/v1/metadata         — empty response (Grafana Prometheus datasource compat)
 GET    /api/v1/openapi.json     — OpenAPI 3.0 spec for all endpoints
 GET    /ready                   — health check (200 when ready)
@@ -251,7 +273,10 @@ To build without the UI (smaller binary, no embedded assets):
 Useful when an agent needs to hand off state to a new session:
 
 ```bash
-# On-demand snapshot
+# On-demand snapshot (cross-platform — works on Windows too)
+curl -X POST http://localhost:4320/api/v1/snapshot
+
+# On-demand snapshot via signal (Unix only)
 kill -USR1 $(pgrep aniani)
 
 # Auto-snapshot every 60 seconds
@@ -260,6 +285,12 @@ aniani --snapshot-interval 60 --snapshot-dir .aniani/
 # Restore on next boot
 aniani --restore --snapshot-dir .aniani/
 ```
+
+`POST /api/v1/snapshot` is the portable trigger and is the recommended way to
+take an on-demand snapshot on Windows, where there is no `SIGUSR1`. On Windows,
+the on-shutdown snapshot also fires for console-close, logoff, and system
+shutdown — but those handlers get only a brief grace window, so for large stores
+prefer `--snapshot-interval` to guarantee a recent snapshot exists.
 
 ---
 

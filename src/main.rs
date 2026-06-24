@@ -111,14 +111,13 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(&addr).await?;
     tracing::info!("aniani listening on {}", addr);
 
-    // Graceful shutdown: wait for SIGTERM (or ctrl-c), save snapshot, then exit
+    // Graceful shutdown: wait for a termination signal, save snapshot, then exit.
     let shutdown_state = state.clone();
     let shutdown_snap_dir = PathBuf::from(&config.snapshot_dir);
     let shutdown_signal = async move {
-        let ctrl_c = tokio::signal::ctrl_c();
-
         #[cfg(unix)]
         {
+            let ctrl_c = tokio::signal::ctrl_c();
             let mut sigterm =
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
                     .expect("failed to register SIGTERM handler");
@@ -132,9 +131,35 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        #[cfg(not(unix))]
+        // On Windows, Ctrl-C alone misses the most common termination paths
+        // (closing the console window, logoff, OS shutdown), so select over the
+        // full set of console control events to give the shutdown snapshot a
+        // chance to run. Note: Windows grants close/logoff/shutdown handlers only
+        // a brief grace window, so for large stores prefer --snapshot-interval.
+        #[cfg(windows)]
         {
-            ctrl_c.await.ok();
+            use tokio::signal::windows;
+            let mut ctrl_c = windows::ctrl_c().expect("failed to register Ctrl-C handler");
+            let mut ctrl_break =
+                windows::ctrl_break().expect("failed to register Ctrl-Break handler");
+            let mut ctrl_close =
+                windows::ctrl_close().expect("failed to register console-close handler");
+            let mut ctrl_logoff =
+                windows::ctrl_logoff().expect("failed to register logoff handler");
+            let mut ctrl_shutdown =
+                windows::ctrl_shutdown().expect("failed to register shutdown handler");
+            tokio::select! {
+                _ = ctrl_c.recv() => tracing::info!("Ctrl-C received, shutting down"),
+                _ = ctrl_break.recv() => tracing::info!("Ctrl-Break received, shutting down"),
+                _ = ctrl_close.recv() => tracing::info!("console close received, shutting down"),
+                _ = ctrl_logoff.recv() => tracing::info!("logoff received, shutting down"),
+                _ = ctrl_shutdown.recv() => tracing::info!("system shutdown received, shutting down"),
+            }
+        }
+
+        #[cfg(not(any(unix, windows)))]
+        {
+            tokio::signal::ctrl_c().await.ok();
             tracing::info!("ctrl-c received, shutting down");
         }
 

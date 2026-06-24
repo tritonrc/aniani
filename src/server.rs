@@ -57,6 +57,7 @@ pub fn build_router(state: SharedState) -> Router {
         .route("/api/v1/diagnose", get(api::diagnose::diagnose))
         .route("/api/v1/catalog", get(api::catalog::catalog))
         .route("/api/v1/reset", delete(api::reset::reset))
+        .route("/api/v1/snapshot", post(api::snapshot::snapshot))
         .route("/api/v1/services", get(api::services::list_services))
         .route("/api/v1/status", get(api::status::status))
         .route("/api/v1/summary", get(api::summary::summary))
