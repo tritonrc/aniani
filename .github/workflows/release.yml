@@ -98,3 +98,46 @@ jobs:
             artifacts/*.tar.gz \
             artifacts/*.zip \
             artifacts/*.sha256
+
+      - name: Bump Homebrew formula
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "HOMEBREW_TAP_TOKEN not set — skipping Homebrew formula bump."
+            exit 0
+          fi
+          version="${GITHUB_REF_NAME#v}"
+          mac_sha=$(awk '{print $1}' artifacts/aniani-macos-arm64.tar.gz.sha256)
+          linux_sha=$(awk '{print $1}' artifacts/aniani-linux-x86_64.tar.gz.sha256)
+          if [ -z "$mac_sha" ] || [ -z "$linux_sha" ]; then
+            echo "missing checksums; aborting formula bump" >&2
+            exit 1
+          fi
+          git clone --depth 1 \
+            "https://x-access-token:${TAP_TOKEN}@github.com/tritonrc/homebrew-tap.git" tap
+          # Patch version, release URLs, and the per-platform sha256 values in
+          # place, preserving the formula's formatting. The macOS sha256 follows
+          # the macos-arm64 URL; the Linux sha256 follows the linux-x86_64 URL.
+          awk -v ver="$version" -v macsha="$mac_sha" -v linuxsha="$linux_sha" '
+            /version "/ { sub(/"[^"]*"/, "\"" ver "\"") }
+            /releases\/download\/v/ { gsub(/v[0-9]+\.[0-9]+\.[0-9]+/, "v" ver) }
+            /aniani-macos-arm64\.tar\.gz/ { which = "mac" }
+            /aniani-linux-x86_64\.tar\.gz/ { which = "linux" }
+            /sha256 "/ {
+              if (which == "mac") { sub(/"[^"]*"/, "\"" macsha "\""); which = "" }
+              else if (which == "linux") { sub(/"[^"]*"/, "\"" linuxsha "\""); which = "" }
+            }
+            { print }
+          ' tap/Formula/aniani.rb > tap/Formula/aniani.rb.new
+          mv tap/Formula/aniani.rb.new tap/Formula/aniani.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/aniani.rb
+          if git diff --cached --quiet; then
+            echo "Homebrew formula already up to date."
+          else
+            git commit -m "aniani ${version}"
+            git push
+          fi

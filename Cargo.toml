@@ -2,6 +2,7 @@
 name = "aniani"
 version = "0.10.0"
 edition = "2024"
+license = "MIT"
 
 [lib]
 name = "aniani"
