@@ -44,5 +44,12 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo clippy --all-targets -- -D warnings
 
+      # Compile the binary with its real (no-dev-dependency) feature set.
+      # Single-port gRPC relies on tonic WITHOUT the `transport` feature; a
+      # plain `cargo test` would mask a regression here because dev-dependencies
+      # can unify extra tonic features into the build.
+      - name: Build (production feature set)
+        run: cargo build --bin aniani
+
       - name: Test
         run: cargo test

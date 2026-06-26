@@ -42,8 +42,10 @@ impl MetricsService for MetricsCollector {
         &self,
         request: Request<ExportMetricsServiceRequest>,
     ) -> Result<Response<ExportMetricsServiceResponse>, Status> {
-        otlp_metrics::ingest_metrics(&self.state, request.into_inner())
-            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        otlp_metrics::ingest_metrics(&self.state, request.into_inner()).map_err(|e| {
+            tracing::warn!("rejecting OTLP/gRPC metric ingest: {}", e);
+            Status::invalid_argument(e.to_string())
+        })?;
         Ok(Response::new(ExportMetricsServiceResponse::default()))
     }
 }
