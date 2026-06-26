@@ -125,6 +125,18 @@ All ingest endpoints share the same port as queries — no separate collector pr
 
 **OTLP JSON support:** All OTLP endpoints (`/v1/logs`, `/v1/metrics`, `/v1/traces`) accept `Content-Type: application/json` in addition to the default protobuf encoding. All OTLP endpoints also accept gzip-compressed bodies (`Content-Encoding: gzip`).
 
+**OTLP/gRPC:** The same three signals are also accepted over gRPC on the *same port* — gRPC (cleartext HTTP/2) is multiplexed with the HTTP surface, so there's no separate port or flag. Point an SDK's gRPC exporter at the base port with TLS disabled:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4320 \
+OTEL_EXPORTER_OTLP_PROTOCOL=grpc \
+OTEL_EXPORTER_OTLP_INSECURE=true \
+OTEL_SERVICE_NAME=api-gateway \
+  ./api-gateway &
+```
+
+The services are the standard `opentelemetry.proto.collector.{metrics,trace,logs}.v1.*Service/Export`, and gzip-compressed requests are accepted.
+
 **Ingest responses:** Successful ingestion returns a JSON acknowledgment with counts:
 
 ```json

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Aniani is a lightweight, ephemeral observability engine: a single Rust binary exposing LogQL, PromQL, and TraceQL query surfaces over in-memory stores. It receives telemetry via Loki push API, OTLP/HTTP, and Prometheus remote write — services send directly to Aniani. It is designed to be booted per git worktree for agent-driven development workflows.
+Aniani is a lightweight, ephemeral observability engine: a single Rust binary exposing LogQL, PromQL, and TraceQL query surfaces over in-memory stores. It receives telemetry via Loki push API, OTLP/HTTP, OTLP/gRPC, and Prometheus remote write — services send directly to Aniani. It is designed to be booted per git worktree for agent-driven development workflows.
 
 Read `DESIGN.md` for the full technical specification before making changes.
 
@@ -72,6 +72,7 @@ src/
 │       ├── parser.rs    # nom parser for TraceQL
 │       ├── eval.rs      # TraceQL evaluator against TraceStore
 │       └── handlers.rs  # Axum handlers for /api/search, /api/traces/{traceID}
+├── grpc.rs              # OTLP/gRPC collector services (logs, metrics, traces) over the shared HTTP listener
 ├── snapshot.rs          # Bincode serialize/deserialize, SIGUSR1 handler
 └── api/
     ├── mod.rs
@@ -203,6 +204,7 @@ lasso = { version = "0.7", features = ["serialize"] }
 promql-parser = "0.8"
 opentelemetry-proto = { version = "0.31", features = ["gen-tonic-messages", "with-serde"] }
 prost = "0.14"
+tonic = { version = "0.14", default-features = false, features = ["server", "router", "gzip"] }
 nom = "8"
 regex = "1"
 bincode = "1"
@@ -224,7 +226,7 @@ codegen-units = 1
 strip = true
 ```
 
-If `opentelemetry-proto` or `promql-parser` versions have breaking changes, check their changelogs and adapt. The feature flags above are critical — `gen-tonic-messages` on `opentelemetry-proto` generates the message types we need without pulling in full gRPC server/client code; `with-serde` enables serde support on OTLP types; `serialize` on `lasso` enables bincode snapshot support; `cors` on `tower-http` enables CORS middleware for cross-origin access.
+If `opentelemetry-proto` or `promql-parser` versions have breaking changes, check their changelogs and adapt. The feature flags above are critical — `gen-tonic-messages` on `opentelemetry-proto` generates the OTLP message types *and* the tonic service stubs (client + server); `tonic` is then added directly with only `server` + `router` + `gzip` to supply the gRPC server runtime those stubs plug into, multiplexed onto the existing HTTP listener via `Routes::into_axum_router` — so no separate gRPC port and no `transport` feature are needed (do NOT switch `opentelemetry-proto` to the `gen-tonic` feature; that only adds the client `Channel`); `with-serde` enables serde support on OTLP types; `serialize` on `lasso` enables bincode snapshot support; `cors` on `tower-http` enables CORS middleware for cross-origin access.
 
 ---
 
@@ -240,8 +242,7 @@ If `opentelemetry-proto` or `promql-parser` versions have breaking changes, chec
 
 ## What NOT to Build
 
-- No gRPC support. OTLP/HTTP only (protobuf body over HTTP POST).
-- No authentication or TLS. This runs on localhost for ephemeral worktree use.
+- No authentication or TLS. This runs on localhost for ephemeral worktree use. OTLP/gRPC is served cleartext (h2c) only — never enable a tonic `tls-*` feature.
 - No WAL or durable storage beyond snapshots.
 - No streaming/push query results. All queries are request/response.
 - No query caching. Stores are small enough that re-evaluation is fast.

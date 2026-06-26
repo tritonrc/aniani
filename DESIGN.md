@@ -2,7 +2,7 @@
 
 ## Overview
 
-A single Rust binary exposing three API surfaces — LogQL, PromQL, and TraceQL — designed for ephemeral, per-worktree observability. A single Aniani instance serves all services in a worktree (e.g. API gateway, payments engine, worker processes). Services are distinguished by labels (`service`, `resource.service.name`) and queryable independently or in aggregate. Services send telemetry directly to Aniani via OTLP/HTTP (metrics, traces, logs) and Loki push API (logs). Everything is stored in-memory with optional snapshot-to-disk. Aniani supports the 80/20 subset of each query language that agents need to reason about runtime behavior.
+A single Rust binary exposing three API surfaces — LogQL, PromQL, and TraceQL — designed for ephemeral, per-worktree observability. A single Aniani instance serves all services in a worktree (e.g. API gateway, payments engine, worker processes). Services are distinguished by labels (`service`, `resource.service.name`) and queryable independently or in aggregate. Services send telemetry directly to Aniani via OTLP/HTTP and OTLP/gRPC (metrics, traces, logs) and Loki push API (logs). Everything is stored in-memory with optional snapshot-to-disk. Aniani supports the 80/20 subset of each query language that agents need to reason about runtime behavior.
 
 The name "Aniani" is Hawaiian for *mirror; clear, transparent glass* — it reflects your running system back to you, clearly.
 
@@ -104,6 +104,7 @@ The name "Aniani" is Hawaiian for *mirror; clear, transparent glass* — it refl
 | `tracing` | Internal logging (the irony is not lost) |
 | `snap` | Snappy decompression for Loki JSON push and Prometheus remote write |
 | `flate2` | Gzip support for OTLP |
+| `tonic` | gRPC server for OTLP/gRPC ingest — multiplexed onto the HTTP listener; gzip + decode limits |
 | `regex` | Regex label matchers in LogQL/PromQL |
 
 ---
@@ -116,7 +117,8 @@ aniani [OPTIONS]
 OPTIONS:
     --port <PORT>              Base port (default: 4320)
                                Loki push:  {port}
-                               OTLP:       {port}
+                               OTLP/HTTP:  {port}
+                               OTLP/gRPC:  {port}
                                Query APIs: {port}
     --snapshot-dir <PATH>      Directory for snapshots (default: .aniani/)
     --snapshot-interval <SECS> Auto-snapshot interval, 0 to disable (default: 0)
@@ -127,7 +129,7 @@ OPTIONS:
     --restore                  Restore from snapshot on startup if available
 ```
 
-All three API surfaces share a single port. Routes are disambiguated by path prefix.
+All API surfaces share a single port. HTTP routes (ingest, query, management) are disambiguated by path prefix; OTLP/gRPC (cleartext HTTP/2) is multiplexed onto the same listener and dispatched by the HTTP/2 connection preface, so an OTLP SDK can target the base port over either HTTP or gRPC.
 
 ---
 
@@ -193,6 +195,17 @@ Accepts OTLP `ExportLogsServiceRequest` (protobuf). An alternative to the Loki p
 1. Decode protobuf using `opentelemetry-proto` types, extract resource/scope/log record attributes
 2. Map to `LogEntry` with timestamp and body as the log line
 3. Promote `resource.service.name` to `service` label, store in `LogStore`
+
+### OTLP/gRPC — all three signals
+
+**Endpoints:** the standard OTLP collector gRPC services, served on the base port:
+- `opentelemetry.proto.collector.metrics.v1.MetricsService/Export`
+- `opentelemetry.proto.collector.trace.v1.TraceService/Export`
+- `opentelemetry.proto.collector.logs.v1.LogsService/Export`
+
+The gRPC handlers receive an already-decoded `Export*ServiceRequest` from `tonic` and hand it straight to the same transport-free `ingest_metrics` / `ingest_traces` / `ingest_logs` functions used by the OTLP/HTTP path — so mapping, label promotion, interning, and indexing behave identically regardless of transport. gRPC is cleartext (h2c, no TLS — matching the localhost model), accepts gzip-compressed requests, and applies the same 64 MiB decode limit as the HTTP path. A metric-name collision is returned as gRPC `InvalidArgument`; full success returns an empty `Export*ServiceResponse`.
+
+Because gRPC shares the listener with REST, OTLP SDKs pointed at the base port work whether configured for `http/protobuf` or `grpc` (insecure). No separate port or flag is required.
 
 ### Metrics — Prometheus Remote Write
 
