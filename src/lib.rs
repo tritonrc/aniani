@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod config;
+pub mod grpc;
 pub mod ingest;
 pub mod query;
 pub mod server;
