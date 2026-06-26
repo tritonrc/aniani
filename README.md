@@ -35,12 +35,26 @@ Running 8 agents in parallel across 8 worktrees means 8 independent Aniani insta
 
 ## Install
 
-Download a prebuilt binary from [Releases](https://github.com/tritonrc/aniani/releases):
+### Homebrew (macOS, Linux) — recommended
+
+```sh
+brew install tritonrc/tap/aniani
+```
+
+Homebrew is the easiest path and avoids the macOS Gatekeeper "unidentified
+developer" prompt that appears when you run a binary downloaded directly from
+Releases. Upgrade with `brew upgrade aniani`.
+
+### Direct download
+
+Or grab a prebuilt binary from [Releases](https://github.com/tritonrc/aniani/releases):
 
 ```bash
 # macOS (Apple Silicon)
 curl -L https://github.com/tritonrc/aniani/releases/latest/download/aniani-macos-arm64.tar.gz | tar xz
 chmod +x aniani && mv aniani /usr/local/bin/
+# First run blocked by Gatekeeper? Clear the download quarantine flag:
+#   xattr -d com.apple.quarantine /usr/local/bin/aniani
 
 # Linux (x86_64)
 curl -L https://github.com/tritonrc/aniani/releases/latest/download/aniani-linux-x86_64.tar.gz | tar xz
