@@ -13,8 +13,15 @@ use prost::Message;
 
 use super::label::{extract_resource_labels, promote_service_name};
 use super::{decode_body, is_json_content_type, u64_to_i64_saturating};
-use crate::store::SharedState;
-use crate::store::metric_store::Sample;
+use crate::store::metric_store::{MetricStoreError, Sample};
+use crate::store::{AppState, SharedState};
+
+/// Accepted-count summary returned by [`ingest_metrics`].
+#[derive(Debug, Clone, Copy)]
+pub struct MetricsAccepted {
+    pub series: usize,
+    pub samples: usize,
+}
 
 /// Handler for POST /v1/metrics.
 ///
@@ -51,6 +58,34 @@ pub async fn metrics_handler(
         }
     };
 
+    match ingest_metrics(&state, request) {
+        Ok(accepted) => Json(serde_json::json!({
+            "accepted": {
+                "series": accepted.series,
+                "samples": accepted.samples,
+            }
+        }))
+        .into_response(),
+        Err(e) => {
+            tracing::warn!("rejecting OTLP metric ingest: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Ingest a decoded `ExportMetricsServiceRequest` into the metric store.
+///
+/// Transport-agnostic: shared by the OTLP/HTTP handler and the OTLP/gRPC
+/// service. Returns accepted series/sample counts, or a [`MetricStoreError`]
+/// when a normalized metric name collides with a different source name.
+pub fn ingest_metrics(
+    state: &AppState,
+    request: ExportMetricsServiceRequest,
+) -> Result<MetricsAccepted, MetricStoreError> {
     type MetricData = (String, String, Vec<(String, String)>, Vec<Sample>);
     let mut prepared: Vec<MetricData> = Vec::new();
 
@@ -209,36 +244,19 @@ pub async fn metrics_handler(
 
     let mut store = state.metric_store.write();
     for (name, source_name, _, _) in &prepared {
-        if let Err(e) = store.check_metric_name_collision(name, source_name) {
-            tracing::warn!("rejecting OTLP metric ingest: {}", e);
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
+        store.check_metric_name_collision(name, source_name)?;
     }
     for (name, source_name, _, _) in &prepared {
-        if let Err(e) = store.register_metric_name(name, source_name) {
-            tracing::warn!("rejecting OTLP metric ingest: {}", e);
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
+        store.register_metric_name(name, source_name)?;
     }
     for (name, _, labels, samples) in prepared {
         store.ingest_samples(&name, labels, samples);
     }
 
-    Json(serde_json::json!({
-        "accepted": {
-            "series": series_count,
-            "samples": sample_count,
-        }
-    }))
-    .into_response()
+    Ok(MetricsAccepted {
+        series: series_count,
+        samples: sample_count,
+    })
 }
 
 fn build_dp_labels(
