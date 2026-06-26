@@ -15,8 +15,15 @@ use smallvec::SmallVec;
 
 use super::label::extract_resource_labels;
 use super::{decode_body, is_json_content_type, u64_to_i64_saturating};
-use crate::store::SharedState;
 use crate::store::trace_store::{AttributeValue, Span, SpanEvent, SpanKind, SpanStatus};
+use crate::store::{AppState, SharedState};
+
+/// Accepted-count summary returned by [`ingest_traces`].
+#[derive(Debug, Clone, Copy)]
+pub struct TracesAccepted {
+    pub traces: usize,
+    pub spans: usize,
+}
 
 #[derive(Debug, Clone)]
 enum PreparedAttributeValue {
@@ -83,6 +90,21 @@ pub async fn traces_handler(
         }
     };
 
+    let accepted = ingest_traces(&state, request);
+    Json(serde_json::json!({
+        "accepted": {
+            "traces": accepted.traces,
+            "spans": accepted.spans,
+        }
+    }))
+    .into_response()
+}
+
+/// Ingest a decoded `ExportTraceServiceRequest` into the trace store.
+///
+/// Transport-agnostic: shared by the OTLP/HTTP handler and the OTLP/gRPC
+/// service. Returns accepted trace/span counts.
+pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> TracesAccepted {
     let mut prepared_batches: Vec<Vec<PreparedSpan>> = Vec::new();
     let mut trace_ids = FxHashSet::default();
     let mut total_spans: usize = 0;
@@ -216,13 +238,10 @@ pub async fn traces_handler(
         store.ingest_spans(spans);
     }
 
-    Json(serde_json::json!({
-        "accepted": {
-            "traces": trace_ids.len(),
-            "spans": total_spans,
-        }
-    }))
-    .into_response()
+    TracesAccepted {
+        traces: trace_ids.len(),
+        spans: total_spans,
+    }
 }
 
 fn convert_any_value(

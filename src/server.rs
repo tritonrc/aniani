@@ -68,7 +68,21 @@ pub fn build_router(state: SharedState) -> Router {
     #[cfg(feature = "ui")]
     let router = router.merge(crate::ui::routes());
 
-    router
+    let http = router
         .layer(DefaultBodyLimit::max(MAX_DECOMPRESSED_SIZE))
-        .with_state(state)
+        .with_state(state.clone());
+
+    // OTLP/gRPC shares the listener with HTTP/REST (cleartext HTTP/2,
+    // content-negotiated per connection). gRPC routes are merged after
+    // `with_state` because the collector services carry their own state and
+    // intentionally bypass the HTTP body-limit layer (tonic enforces its own
+    // decode limit). Reassert a 404 fallback so unknown HTTP paths are not
+    // captured by tonic's gRPC "Unimplemented" catch-all.
+    http.merge(crate::grpc::routes(state))
+        .fallback(handle_not_found)
+}
+
+/// Fallback for unmatched routes: a plain HTTP 404.
+async fn handle_not_found() -> axum::http::StatusCode {
+    axum::http::StatusCode::NOT_FOUND
 }

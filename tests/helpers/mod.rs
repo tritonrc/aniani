@@ -3,9 +3,11 @@
 
 use axum::body::Body;
 use axum::http::Request;
+use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
+use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
 use opentelemetry_proto::tonic::metrics::v1::{
     Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics, metric,
 };
@@ -129,6 +131,41 @@ pub fn make_trace_request(
                         code: status_code,
                     }),
                     flags: 0,
+                }],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    }
+}
+
+pub fn make_logs_request(
+    service_name: &str,
+    message: &str,
+    severity_number: i32,
+    ts_ns: u64,
+) -> ExportLogsServiceRequest {
+    ExportLogsServiceRequest {
+        resource_logs: vec![ResourceLogs {
+            resource: Some(Resource {
+                attributes: vec![KeyValue {
+                    key: "service.name".into(),
+                    value: Some(AnyValue {
+                        value: Some(any_value::Value::StringValue(service_name.into())),
+                    }),
+                }],
+                dropped_attributes_count: 0,
+                entity_refs: vec![],
+            }),
+            scope_logs: vec![ScopeLogs {
+                scope: None,
+                log_records: vec![LogRecord {
+                    time_unix_nano: ts_ns,
+                    severity_number,
+                    body: Some(AnyValue {
+                        value: Some(any_value::Value::StringValue(message.into())),
+                    }),
+                    ..Default::default()
                 }],
                 schema_url: String::new(),
             }],

@@ -12,8 +12,8 @@ use prost::Message;
 
 use super::label::{extract_resource_labels, promote_service_name};
 use super::{decode_body, is_json_content_type, u64_to_i64_saturating};
-use crate::store::SharedState;
 use crate::store::log_store::LogEntry;
+use crate::store::{AppState, SharedState};
 
 /// Handler for POST /v1/logs.
 pub async fn logs_handler(
@@ -47,6 +47,15 @@ pub async fn logs_handler(
         }
     };
 
+    ingest_logs(&state, request);
+    StatusCode::NO_CONTENT
+}
+
+/// Ingest a decoded `ExportLogsServiceRequest` into the log store.
+///
+/// Transport-agnostic: shared by the OTLP/HTTP handler and the OTLP/gRPC
+/// service. Returns the number of log entries ingested.
+pub fn ingest_logs(state: &AppState, request: ExportLogsServiceRequest) -> usize {
     // Prepare all ingestion data outside the write lock.
     type LogBatch = (Vec<(String, String)>, Vec<LogEntry>);
     let mut prepared: Vec<LogBatch> = Vec::new();
@@ -90,7 +99,7 @@ pub async fn logs_handler(
     }
 
     tracing::debug!(entries = entry_count, "ingested OTLP logs");
-    StatusCode::NO_CONTENT
+    entry_count
 }
 
 fn current_time_ns() -> i64 {
