@@ -15,6 +15,9 @@ use super::{LabelMatcher, LabelPairs};
 pub struct Sample {
     pub timestamp_ms: i64,
     pub value: f64,
+    /// Global monotonic ingest sequence; assigned on store insert.
+    #[serde(default)]
+    pub ingest_seq: u64,
 }
 
 /// A metric time-series identified by labels (including __name__).
@@ -446,6 +449,7 @@ mod tests {
             vec![Sample {
                 timestamp_ms: 1000,
                 value: 42.0,
+                ingest_seq: 0,
             }],
         );
 
@@ -470,6 +474,7 @@ mod tests {
             vec![Sample {
                 timestamp_ms: 1000,
                 value: 10.0,
+                ingest_seq: 0,
             }],
         );
         store.ingest_samples(
@@ -478,6 +483,7 @@ mod tests {
             vec![Sample {
                 timestamp_ms: 1000,
                 value: 5.0,
+                ingest_seq: 0,
             }],
         );
 
@@ -508,10 +514,12 @@ mod tests {
                 Sample {
                     timestamp_ms: 1000,
                     value: 1.0,
+                    ingest_seq: 0,
                 },
                 Sample {
                     timestamp_ms: 5000,
                     value: 2.0,
+                    ingest_seq: 0,
                 },
             ],
         );
@@ -532,6 +540,7 @@ mod tests {
             vec![Sample {
                 timestamp_ms: 1000,
                 value: 1.0,
+                ingest_seq: 0,
             }],
         );
         store.ingest_samples(
@@ -540,6 +549,7 @@ mod tests {
             vec![Sample {
                 timestamp_ms: 2000,
                 value: 2.0,
+                ingest_seq: 0,
             }],
         );
         // {__name__="cpu", env!="prod"} should match server2 (missing env label)
@@ -572,6 +582,7 @@ mod tests {
             vec![Sample {
                 timestamp_ms: 1000,
                 value: 1.0,
+                ingest_seq: 0,
             }],
         );
         store.ingest_samples(
@@ -580,6 +591,7 @@ mod tests {
             vec![Sample {
                 timestamp_ms: 2000,
                 value: 2.0,
+                ingest_seq: 0,
             }],
         );
         // {__name__="cpu", env!~"staging"} should match server2 (missing env label)
@@ -610,14 +622,17 @@ mod tests {
                 Sample {
                     timestamp_ms: 3000,
                     value: 3.0,
+                    ingest_seq: 0,
                 },
                 Sample {
                     timestamp_ms: 1000,
                     value: 1.0,
+                    ingest_seq: 0,
                 },
                 Sample {
                     timestamp_ms: 2000,
                     value: 2.0,
+                    ingest_seq: 0,
                 },
             ],
         );
@@ -648,6 +663,7 @@ mod tests {
             vec![Sample {
                 timestamp_ms: 1000,
                 value: 1.0,
+                ingest_seq: 0,
             }],
         );
         store.ingest_samples(
@@ -656,6 +672,7 @@ mod tests {
             vec![Sample {
                 timestamp_ms: 2000,
                 value: 2.0,
+                ingest_seq: 0,
             }],
         );
         store.ingest_samples(
@@ -665,10 +682,12 @@ mod tests {
                 Sample {
                     timestamp_ms: 3000,
                     value: 3.0,
+                    ingest_seq: 0,
                 },
                 Sample {
                     timestamp_ms: 4000,
                     value: 4.0,
+                    ingest_seq: 0,
                 },
             ],
         );
@@ -690,6 +709,7 @@ mod tests {
             vec![Sample {
                 timestamp_ms: 1000,
                 value: 0.5,
+                ingest_seq: 0,
             }],
         );
         let names = store.label_names();
@@ -709,6 +729,7 @@ mod tests {
             vec![Sample {
                 timestamp_ms: 1000,
                 value: 0.5,
+                ingest_seq: 0,
             }],
         );
         assert!(!store.label_names().is_empty());
@@ -725,6 +746,7 @@ mod tests {
             vec![Sample {
                 timestamp_ms: 100,
                 value: 1.0,
+                ingest_seq: 0,
             }],
         );
         // Append internally unsorted batch — all > 100
@@ -735,10 +757,12 @@ mod tests {
                 Sample {
                     timestamp_ms: 300,
                     value: 3.0,
+                    ingest_seq: 0,
                 },
                 Sample {
                     timestamp_ms: 200,
                     value: 2.0,
+                    ingest_seq: 0,
                 },
             ],
         );

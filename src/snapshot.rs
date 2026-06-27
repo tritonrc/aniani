@@ -144,6 +144,7 @@ mod tests {
             vec![LogEntry {
                 timestamp_ns: 1000,
                 line: "hello".into(),
+                ingest_seq: 0,
             }],
         );
 
@@ -154,6 +155,7 @@ mod tests {
             vec![Sample {
                 timestamp_ms: 1000,
                 value: 0.5,
+                ingest_seq: 0,
             }],
         );
 

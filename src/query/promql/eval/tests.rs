@@ -15,6 +15,7 @@ fn make_store() -> MetricStore {
             vec![Sample {
                 timestamp_ms: i * 1000,
                 value: (i * 10) as f64,
+                ingest_seq: 0,
             }],
         );
         store.ingest_samples(
@@ -26,6 +27,7 @@ fn make_store() -> MetricStore {
             vec![Sample {
                 timestamp_ms: i * 1000,
                 value: (i * 5) as f64,
+                ingest_seq: 0,
             }],
         );
     }
@@ -35,6 +37,7 @@ fn make_store() -> MetricStore {
         vec![Sample {
             timestamp_ms: 5000,
             value: 1_000_000.0,
+            ingest_seq: 0,
         }],
     );
     store
@@ -121,6 +124,7 @@ fn test_binary_vector_matches_by_labels_without_metric_name() {
         vec![Sample {
             timestamp_ms: 1000,
             value: 7.0,
+            ingest_seq: 0,
         }],
     );
     store.ingest_samples(
@@ -129,6 +133,7 @@ fn test_binary_vector_matches_by_labels_without_metric_name() {
         vec![Sample {
             timestamp_ms: 1000,
             value: 2.0,
+            ingest_seq: 0,
         }],
     );
 
@@ -314,22 +319,27 @@ fn test_rate_with_counter_reset() {
         Sample {
             timestamp_ms: 1000,
             value: 0.0,
+            ingest_seq: 0,
         },
         Sample {
             timestamp_ms: 2000,
             value: 10.0,
+            ingest_seq: 0,
         },
         Sample {
             timestamp_ms: 3000,
             value: 20.0,
+            ingest_seq: 0,
         },
         Sample {
             timestamp_ms: 4000,
             value: 5.0,
+            ingest_seq: 0,
         },
         Sample {
             timestamp_ms: 5000,
             value: 15.0,
+            ingest_seq: 0,
         },
     ];
     let result = compute_rate_like("rate", &samples, 5000);
@@ -348,10 +358,12 @@ fn test_rate_no_reset() {
         Sample {
             timestamp_ms: 1000,
             value: 0.0,
+            ingest_seq: 0,
         },
         Sample {
             timestamp_ms: 5000,
             value: 100.0,
+            ingest_seq: 0,
         },
     ];
     let result = compute_rate_like("rate", &samples, 5000);
@@ -366,10 +378,12 @@ fn test_irate_with_reset() {
         Sample {
             timestamp_ms: 1000,
             value: 100.0,
+            ingest_seq: 0,
         },
         Sample {
             timestamp_ms: 2000,
             value: 5.0,
+            ingest_seq: 0,
         },
     ];
     let result = compute_rate_like("irate", &samples, 2000);

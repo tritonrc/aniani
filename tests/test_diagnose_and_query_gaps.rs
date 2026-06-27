@@ -675,6 +675,7 @@ async fn test_promql_absent_returns_empty_for_existing_metric() {
             vec![aniani::store::metric_store::Sample {
                 timestamp_ms: now_ms,
                 value: 42.0,
+                ingest_seq: 0,
             }],
         );
     }
@@ -710,14 +711,17 @@ async fn test_promql_delta() {
                 aniani::store::metric_store::Sample {
                     timestamp_ms: base_ms,
                     value: 20.0,
+                    ingest_seq: 0,
                 },
                 aniani::store::metric_store::Sample {
                     timestamp_ms: base_ms + 60_000,
                     value: 25.0,
+                    ingest_seq: 0,
                 },
                 aniani::store::metric_store::Sample {
                     timestamp_ms: base_ms + 120_000,
                     value: 30.0,
+                    ingest_seq: 0,
                 },
             ],
         );
@@ -756,14 +760,17 @@ async fn test_promql_deriv() {
                 aniani::store::metric_store::Sample {
                     timestamp_ms: base_ms,
                     value: 0.0,
+                    ingest_seq: 0,
                 },
                 aniani::store::metric_store::Sample {
                     timestamp_ms: base_ms + 60_000,
                     value: 60.0,
+                    ingest_seq: 0,
                 },
                 aniani::store::metric_store::Sample {
                     timestamp_ms: base_ms + 120_000,
                     value: 120.0,
+                    ingest_seq: 0,
                 },
             ],
         );
@@ -813,6 +820,7 @@ async fn test_promql_sort() {
                 vec![aniani::store::metric_store::Sample {
                     timestamp_ms: now_ms,
                     value: *val,
+                    ingest_seq: 0,
                 }],
             );
         }
@@ -856,6 +864,7 @@ async fn test_promql_sort_desc() {
                 vec![aniani::store::metric_store::Sample {
                     timestamp_ms: now_ms,
                     value: *val,
+                    ingest_seq: 0,
                 }],
             );
         }
@@ -902,6 +911,7 @@ async fn test_promql_clamp() {
             vec![aniani::store::metric_store::Sample {
                 timestamp_ms: now_ms,
                 value: 150.0,
+                ingest_seq: 0,
             }],
         );
     }
@@ -935,6 +945,7 @@ async fn test_promql_clamp_min() {
             vec![aniani::store::metric_store::Sample {
                 timestamp_ms: now_ms,
                 value: -5.0,
+                ingest_seq: 0,
             }],
         );
     }
@@ -968,6 +979,7 @@ async fn test_promql_clamp_max() {
             vec![aniani::store::metric_store::Sample {
                 timestamp_ms: now_ms,
                 value: 200.0,
+                ingest_seq: 0,
             }],
         );
     }
@@ -1055,6 +1067,7 @@ async fn test_promql_scalar() {
             vec![aniani::store::metric_store::Sample {
                 timestamp_ms: now_ms,
                 value: 99.0,
+                ingest_seq: 0,
             }],
         );
     }

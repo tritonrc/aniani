@@ -515,6 +515,7 @@ mod tests {
             )]),
             kind: SpanKind::Unspecified,
             events: Vec::new(),
+            ingest_seq: 0,
         };
         let span2 = Span {
             trace_id: tid1,
@@ -531,6 +532,7 @@ mod tests {
             )]),
             kind: SpanKind::Unspecified,
             events: Vec::new(),
+            ingest_seq: 0,
         };
 
         // Trace 2: slow span
@@ -550,6 +552,7 @@ mod tests {
             )]),
             kind: SpanKind::Unspecified,
             events: Vec::new(),
+            ingest_seq: 0,
         };
 
         store.ingest_spans(vec![span1, span2, span3]);

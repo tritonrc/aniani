@@ -42,6 +42,7 @@ fn test_promql_unsupported_aggregation_errors() {
         vec![Sample {
             timestamp_ms: 1000,
             value: 1.0,
+            ingest_seq: 0,
         }],
     );
 
@@ -69,6 +70,7 @@ async fn test_promql_timestamp_millis_not_misread() {
             vec![aniani::store::metric_store::Sample {
                 timestamp_ms: 1709251200000,
                 value: 42.0,
+                ingest_seq: 0,
             }],
         );
     }
@@ -268,6 +270,7 @@ async fn test_max_spans_enforced() {
             restore: false,
         },
         start_time: Instant::now(),
+        ingest_seq: std::sync::atomic::AtomicU64::new(0),
     });
 
     let app = aniani::server::build_router(state.clone());
@@ -436,6 +439,7 @@ fn test_trace_store_status_index() {
             kind: aniani::store::trace_store::SpanKind::Unspecified,
             attributes: smallvec::SmallVec::new(),
             events: Vec::new(),
+            ingest_seq: 0,
         },
         aniani::store::trace_store::Span {
             trace_id: error_trace_id_a,
@@ -449,6 +453,7 @@ fn test_trace_store_status_index() {
             kind: aniani::store::trace_store::SpanKind::Unspecified,
             attributes: smallvec::SmallVec::new(),
             events: Vec::new(),
+            ingest_seq: 0,
         },
         aniani::store::trace_store::Span {
             trace_id: error_trace_id_b,
@@ -462,6 +467,7 @@ fn test_trace_store_status_index() {
             kind: aniani::store::trace_store::SpanKind::Unspecified,
             attributes: smallvec::SmallVec::new(),
             events: Vec::new(),
+            ingest_seq: 0,
         },
         aniani::store::trace_store::Span {
             trace_id: unset_trace_id,
@@ -475,6 +481,7 @@ fn test_trace_store_status_index() {
             kind: aniani::store::trace_store::SpanKind::Unspecified,
             attributes: smallvec::SmallVec::new(),
             events: Vec::new(),
+            ingest_seq: 0,
         },
     ]);
 
@@ -527,6 +534,7 @@ fn test_max_series_limits_unique_series() {
             restore: false,
         },
         start_time: std::time::Instant::now(),
+        ingest_seq: std::sync::atomic::AtomicU64::new(0),
     });
 
     let now_ms = std::time::SystemTime::now()
@@ -541,6 +549,7 @@ fn test_max_series_limits_unique_series() {
                 .map(|j| aniani::store::metric_store::Sample {
                     timestamp_ms: now_ms + (i as i64 * 100) + j as i64,
                     value: (i * 10 + j) as f64,
+                    ingest_seq: 0,
                 })
                 .collect::<Vec<_>>();
             store.ingest_samples(

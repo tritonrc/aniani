@@ -30,6 +30,7 @@ async fn test_e2e_otlp_to_aniani() {
             restore: false,
         },
         start_time: std::time::Instant::now(),
+        ingest_seq: std::sync::atomic::AtomicU64::new(0),
     });
 
     let app = aniani::server::build_router(state);
