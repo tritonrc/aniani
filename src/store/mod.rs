@@ -283,4 +283,47 @@ mod ingest_seq_restore_tests {
         let traces = TraceStore::new();
         assert_eq!(max_ingest_seq(&logs, &metrics, &traces), 41);
     }
+
+    #[test]
+    fn max_ingest_seq_finds_highest_on_metric_sample() {
+        let logs = LogStore::new();
+        let mut metrics = MetricStore::new();
+        metrics.ingest_samples(
+            "cpu",
+            vec![("host".into(), "a".into())],
+            vec![crate::store::metric_store::Sample {
+                timestamp_ms: 1,
+                value: 0.5,
+                ingest_seq: 57,
+            }],
+        );
+        let traces = TraceStore::new();
+        assert_eq!(max_ingest_seq(&logs, &metrics, &traces), 57);
+    }
+
+    #[test]
+    fn max_ingest_seq_finds_highest_on_span() {
+        use crate::store::trace_store::{Span, SpanKind, SpanStatus};
+
+        let logs = LogStore::new();
+        let metrics = MetricStore::new();
+        let mut traces = TraceStore::new();
+        let name = traces.interner.get_or_intern("span-a");
+        let service = traces.interner.get_or_intern("svc-a");
+        traces.ingest_spans(vec![Span {
+            trace_id: [1u8; 16],
+            span_id: [1u8; 8],
+            parent_span_id: None,
+            name,
+            service_name: service,
+            start_time_ns: 1000,
+            duration_ns: 100,
+            status: SpanStatus::Ok,
+            kind: SpanKind::Unspecified,
+            attributes: SmallVec::new(),
+            events: Vec::new(),
+            ingest_seq: 63,
+        }]);
+        assert_eq!(max_ingest_seq(&logs, &metrics, &traces), 63);
+    }
 }

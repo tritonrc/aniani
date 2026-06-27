@@ -13,9 +13,13 @@ use crate::store::SharedState;
 
 /// Build the axum router for the MCP endpoint (`POST/GET/DELETE /mcp`).
 pub fn routes(state: SharedState) -> axum::Router {
-    use axum::routing::{delete, get, post};
+    use axum::routing::post;
     axum::Router::new()
-        .route("/mcp", post(server::mcp_post))
-        .route("/mcp", get(server::mcp_get).delete(server::mcp_delete))
+        .route(
+            "/mcp",
+            post(server::mcp_post)
+                .get(server::mcp_get)
+                .delete(server::mcp_delete),
+        )
         .with_state(state)
 }
