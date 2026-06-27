@@ -10,6 +10,7 @@ use axum::response::IntoResponse;
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use opentelemetry_proto::tonic::metrics::v1::metric::Data;
 use prost::Message;
+use std::sync::atomic::Ordering;
 
 use super::label::{extract_resource_labels, promote_service_name};
 use super::{decode_body, is_json_content_type, u64_to_i64_saturating};
@@ -112,6 +113,7 @@ pub fn ingest_metrics(
                                 vec![Sample {
                                     timestamp_ms: ts_ms,
                                     value,
+                                    ingest_seq: state.ingest_seq.fetch_add(1, Ordering::Relaxed),
                                 }],
                             ));
                         }
@@ -128,6 +130,7 @@ pub fn ingest_metrics(
                                 vec![Sample {
                                     timestamp_ms: ts_ms,
                                     value,
+                                    ingest_seq: state.ingest_seq.fetch_add(1, Ordering::Relaxed),
                                 }],
                             ));
                         }
@@ -156,6 +159,9 @@ pub fn ingest_metrics(
                                     vec![Sample {
                                         timestamp_ms: ts_ms,
                                         value: cumulative_count as f64,
+                                        ingest_seq: state
+                                            .ingest_seq
+                                            .fetch_add(1, Ordering::Relaxed),
                                     }],
                                 ));
                             }
@@ -168,6 +174,7 @@ pub fn ingest_metrics(
                                 vec![Sample {
                                     timestamp_ms: ts_ms,
                                     value: dp.sum.unwrap_or(0.0),
+                                    ingest_seq: state.ingest_seq.fetch_add(1, Ordering::Relaxed),
                                 }],
                             ));
                             prepared.push((
@@ -177,6 +184,7 @@ pub fn ingest_metrics(
                                 vec![Sample {
                                     timestamp_ms: ts_ms,
                                     value: dp.count as f64,
+                                    ingest_seq: state.ingest_seq.fetch_add(1, Ordering::Relaxed),
                                 }],
                             ));
                         }
@@ -203,6 +211,9 @@ pub fn ingest_metrics(
                                     vec![Sample {
                                         timestamp_ms: ts_ms,
                                         value: qv.value,
+                                        ingest_seq: state
+                                            .ingest_seq
+                                            .fetch_add(1, Ordering::Relaxed),
                                     }],
                                 ));
                             }
@@ -215,6 +226,7 @@ pub fn ingest_metrics(
                                 vec![Sample {
                                     timestamp_ms: ts_ms,
                                     value: dp.sum,
+                                    ingest_seq: state.ingest_seq.fetch_add(1, Ordering::Relaxed),
                                 }],
                             ));
                             prepared.push((
@@ -224,6 +236,7 @@ pub fn ingest_metrics(
                                 vec![Sample {
                                     timestamp_ms: ts_ms,
                                     value: dp.count as f64,
+                                    ingest_seq: state.ingest_seq.fetch_add(1, Ordering::Relaxed),
                                 }],
                             ));
                         }

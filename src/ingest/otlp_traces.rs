@@ -12,6 +12,7 @@ use opentelemetry_proto::tonic::common::v1::any_value;
 use prost::Message;
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
+use std::sync::atomic::Ordering;
 
 use super::label::extract_resource_labels;
 use super::{decode_body, is_json_content_type, u64_to_i64_saturating};
@@ -53,6 +54,7 @@ struct PreparedSpan {
     kind: SpanKind,
     attributes: SmallVec<[(String, PreparedAttributeValue); 8]>,
     events: Vec<PreparedEvent>,
+    ingest_seq: u64,
 }
 
 /// Handler for POST /v1/traces.
@@ -221,6 +223,7 @@ pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> Tr
                     kind,
                     attributes,
                     events,
+                    ingest_seq: state.ingest_seq.fetch_add(1, Ordering::Relaxed),
                 });
             }
 
@@ -291,6 +294,7 @@ fn intern_prepared_span(store: &mut crate::store::TraceStore, prepared: Prepared
         kind: prepared.kind,
         attributes,
         events,
+        ingest_seq: prepared.ingest_seq,
     }
 }
 

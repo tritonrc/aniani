@@ -174,7 +174,13 @@ fn ingest_loki_push(state: &SharedState, request: LokiPushRequest) -> (usize, us
                 .into_iter()
                 .filter_map(|(ts_str, line)| {
                     let timestamp_ns: i64 = ts_str.parse().ok()?;
-                    Some(LogEntry { timestamp_ns, line })
+                    Some(LogEntry {
+                        timestamp_ns,
+                        line,
+                        ingest_seq: state
+                            .ingest_seq
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                    })
                 })
                 .collect();
             (labels, entries)
