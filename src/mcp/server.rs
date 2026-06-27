@@ -185,6 +185,46 @@ mod tests {
         assert!(check_protocol_version(&good).is_ok());
     }
 
+    #[test]
+    fn initialize_echoes_supported_version() {
+        let req = serde_json::from_value(json!({
+            "jsonrpc":"2.0","id":1,"method":"initialize",
+            "params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}
+        })).unwrap();
+        let resp = dispatch(&test_state(), req).expect("request");
+        assert_eq!(resp["result"]["protocolVersion"], json!("2025-06-18"));
+    }
+
+    #[test]
+    fn initialize_unknown_version_falls_back_to_latest() {
+        let req = serde_json::from_value(json!({
+            "jsonrpc":"2.0","id":1,"method":"initialize",
+            "params":{"protocolVersion":"1999-01-01","capabilities":{},"clientInfo":{"name":"t","version":"0"}}
+        })).unwrap();
+        let resp = dispatch(&test_state(), req).expect("request");
+        assert_eq!(resp["result"]["protocolVersion"], json!("2025-11-25"));
+    }
+
+    #[test]
+    fn initialize_absent_version_falls_back_to_latest() {
+        let req = serde_json::from_value(json!({
+            "jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}
+        })).unwrap();
+        let resp = dispatch(&test_state(), req).expect("request");
+        assert_eq!(resp["result"]["protocolVersion"], json!("2025-11-25"));
+    }
+
+    #[test]
+    fn origin_guard_is_fail_closed() {
+        // Literal "null" origin (sandboxed iframes / file://) is rejected.
+        assert!(!is_allowed_origin("null"));
+        // Lookalike subdomain is rejected (exact host match).
+        assert!(!is_allowed_origin("http://localhost.evil.com"));
+        // Userinfo-containing origin is rejected (fail-closed; browsers never
+        // send userinfo in an Origin, so this can only be a crafted value).
+        assert!(!is_allowed_origin("http://evil.com@localhost"));
+    }
+
     fn test_state() -> crate::store::SharedState {
         use crate::store::{AppState, LogStore, MetricStore, TraceStore};
         use clap::Parser;
