@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::{Duration, Instant};
 
 use clap::Parser;
@@ -51,12 +52,15 @@ async fn main() -> anyhow::Result<()> {
         (LogStore::new(), MetricStore::new(), TraceStore::new())
     };
 
+    let seq_seed = store::max_ingest_seq(&log_store, &metric_store, &trace_store).saturating_add(1);
+
     let state: SharedState = Arc::new(AppState {
         log_store: RwLock::new(log_store),
         metric_store: RwLock::new(metric_store),
         trace_store: RwLock::new(trace_store),
         config: config.clone(),
         start_time: Instant::now(),
+        ingest_seq: AtomicU64::new(seq_seed),
     });
 
     // Start eviction background task

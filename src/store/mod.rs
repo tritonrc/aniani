@@ -8,6 +8,7 @@ pub mod posting_list;
 pub mod trace_store;
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 
 use lasso::{Rodeo, Spur};
@@ -28,6 +29,8 @@ pub struct AppState {
     pub trace_store: RwLock<TraceStore>,
     pub config: Config,
     pub start_time: Instant,
+    /// Monotonic counter stamped onto every ingested entry/sample/span.
+    pub ingest_seq: AtomicU64,
 }
 
 /// Type alias for the shared state handle.
@@ -189,6 +192,31 @@ fn all_ids_posting_list(ids: Vec<u64>) -> PostingList {
     PostingList::from_ids(ids)
 }
 
+/// Highest `ingest_seq` present across all three stores (0 if empty). Used to
+/// re-seed the global counter after restoring a snapshot so new ingests stay
+/// monotonic.
+pub fn max_ingest_seq(logs: &LogStore, metrics: &MetricStore, traces: &TraceStore) -> u64 {
+    let l = logs
+        .streams
+        .values()
+        .flat_map(|s| s.entries.iter().map(|e| e.ingest_seq))
+        .max()
+        .unwrap_or(0);
+    let m = metrics
+        .series
+        .values()
+        .flat_map(|s| s.samples.iter().map(|s| s.ingest_seq))
+        .max()
+        .unwrap_or(0);
+    let t = traces
+        .traces
+        .values()
+        .flat_map(|v| v.iter().map(|s| s.ingest_seq))
+        .max()
+        .unwrap_or(0);
+    l.max(m).max(t)
+}
+
 /// Run eviction on all stores based on config.
 pub fn run_eviction(state: &AppState) {
     let retention = state.config.retention_duration();
@@ -233,5 +261,26 @@ fn duration_to_i64_ns(duration: std::time::Duration) -> i64 {
         i64::MAX
     } else {
         ns as i64
+    }
+}
+
+#[cfg(test)]
+mod ingest_seq_restore_tests {
+    use super::*;
+
+    #[test]
+    fn max_ingest_seq_finds_highest_across_stores() {
+        let mut logs = LogStore::new();
+        logs.ingest_stream(
+            vec![("service".into(), "a".into())],
+            vec![crate::store::log_store::LogEntry {
+                timestamp_ns: 1,
+                line: "x".into(),
+                ingest_seq: 41,
+            }],
+        );
+        let metrics = MetricStore::new();
+        let traces = TraceStore::new();
+        assert_eq!(max_ingest_seq(&logs, &metrics, &traces), 41);
     }
 }
