@@ -20,12 +20,14 @@ pub struct ServiceActivity {
     pub summary: String,
     pub logs: LogsBlock,
     pub traces: TracesBlock,
+    pub metrics: MetricsBlock,
     pub truncated: Truncated,
 }
 
 #[derive(Debug, Serialize)]
 pub struct LogsBlock {
     pub error_count: usize,
+    pub total: usize,
     pub top: Vec<LogItem>,
 }
 #[derive(Debug, Serialize)]
@@ -35,7 +37,8 @@ pub struct LogItem {
 }
 #[derive(Debug, Serialize)]
 pub struct TracesBlock {
-    pub error_or_slow_count: usize,
+    pub error_trace_count: usize,
+    pub total: usize,
     pub notable: Vec<TraceItem>,
 }
 #[derive(Debug, Serialize)]
@@ -45,10 +48,21 @@ pub struct TraceItem {
     pub duration_ms: f64,
     pub error_span_count: usize,
 }
+#[derive(Debug, Serialize)]
+pub struct MetricsBlock {
+    pub notable: Vec<MetricItem>,
+}
+#[derive(Debug, Serialize)]
+pub struct MetricItem {
+    pub name: String,
+    pub value: f64,
+    pub labels: Vec<(String, String)>,
+}
 #[derive(Debug, Serialize, Default)]
 pub struct Truncated {
     pub logs: bool,
     pub traces: bool,
+    pub metrics: bool,
 }
 
 fn svc_error_matchers(service: &str) -> Vec<LabelMatcher> {
@@ -69,9 +83,20 @@ pub fn summarize_activity(
     let observed_through = state.ingest_seq.load(std::sync::atomic::Ordering::Relaxed);
     let keep = |seq: u64| since.map(|s| seq >= s).unwrap_or(true);
 
-    // --- Logs (error streams) ---
-    let (error_count, mut error_items) = {
+    // --- Logs: total across all levels + error stream items ---
+    let (error_count, log_total, mut error_items) = {
         let store = state.log_store.read();
+        let all = vec![LabelMatcher {
+            name: "service".into(), op: LabelMatchOp::Eq, value: service.to_string(),
+        }];
+        let mut total = 0usize;
+        for sid in store.query_streams(&all) {
+            for e in store.get_entries(sid, i64::MIN, i64::MAX) {
+                if keep(e.ingest_seq) {
+                    total += 1;
+                }
+            }
+        }
         let mut items: Vec<(i64, String)> = Vec::new();
         for sid in store.query_streams(&svc_error_matchers(service)) {
             for e in store.get_entries(sid, i64::MIN, i64::MAX) {
@@ -80,34 +105,37 @@ pub fn summarize_activity(
                 }
             }
         }
-        (items.len(), items)
+        (items.len(), total, items)
     };
     error_items.sort_by_key(|b| std::cmp::Reverse(b.0));
     let logs_truncated = error_items.len() > DEFAULT_TOP;
     let top: Vec<LogItem> = error_items
         .into_iter()
         .take(DEFAULT_TOP)
-        .map(|(ts, line)| LogItem { ts: ts.to_string(), line })
+        .map(|(ts, line)| LogItem { ts: (ts / 1_000_000).to_string(), line })
         .collect();
 
-    // --- Traces (error / notable) ---
-    let (notable, error_or_slow_count, traces_truncated, span_error_ratio) = {
+    // --- Traces: count only in-window spans (since-accurate) ---
+    let (notable, error_trace_count, trace_total, traces_truncated, span_error_ratio) = {
         let store = state.trace_store.read();
         let mut notable: Vec<TraceItem> = Vec::new();
         let mut total_spans = 0usize;
         let mut error_spans = 0usize;
+        let mut trace_total = 0usize;
         for tid in store.traces_for_service(service) {
             if let Some(spans) = store.get_trace(&tid) {
-                let in_window = spans.iter().any(|s| keep(s.ingest_seq));
-                if !in_window {
+                let in_window = spans.iter().filter(|s| keep(s.ingest_seq)).count();
+                if in_window == 0 {
                     continue;
                 }
-                let errs = spans.iter().filter(|s| s.status == SpanStatus::Error).count();
-                total_spans += spans.len();
+                let errs = spans
+                    .iter()
+                    .filter(|s| keep(s.ingest_seq) && s.status == SpanStatus::Error)
+                    .count();
+                trace_total += 1;
+                total_spans += in_window;
                 error_spans += errs;
-                if errs > 0
-                    && let Some(r) = store.trace_result(&tid)
-                {
+                if errs > 0 && let Some(r) = store.trace_result(&tid) {
                     notable.push(TraceItem {
                         trace_id: tid.iter().map(|b| format!("{b:02x}")).collect(),
                         root_span_name: r.root_span_name,
@@ -124,7 +152,47 @@ pub fn summarize_activity(
         let truncated = notable.len() > DEFAULT_TOP;
         notable.truncate(DEFAULT_TOP);
         let ratio = if total_spans > 0 { error_spans as f64 / total_spans as f64 } else { 0.0 };
-        (notable, count, truncated, ratio)
+        (notable, count, trace_total, truncated, ratio)
+    };
+
+    // --- Metrics: error-ish series for the service (last in-window sample) ---
+    let (metric_items, metrics_truncated) = {
+        let store = state.metric_store.read();
+        let matchers = vec![LabelMatcher {
+            name: "service".into(), op: LabelMatchOp::Eq, value: service.to_string(),
+        }];
+        let name_key = store.interner.get("__name__");
+        let mut items: Vec<MetricItem> = Vec::new();
+        for sid in store.select_series(&matchers) {
+            if let Some(series) = store.series.get(&sid) {
+                let mname = name_key.and_then(|nk| {
+                    series
+                        .labels
+                        .iter()
+                        .find(|(k, _)| *k == nk)
+                        .map(|(_, v)| store.interner.resolve(v).to_string())
+                });
+                let Some(mname) = mname else { continue };
+                let lower = mname.to_ascii_lowercase();
+                if !lower.contains("error") && !lower.contains("fail") {
+                    continue;
+                }
+                if let Some(sample) = series.samples.iter().rev().find(|s| keep(s.ingest_seq)) {
+                    let labels = series
+                        .labels
+                        .iter()
+                        .filter(|(k, _)| Some(*k) != name_key)
+                        .map(|(k, v)| {
+                            (store.interner.resolve(k).to_string(), store.interner.resolve(v).to_string())
+                        })
+                        .collect();
+                    items.push(MetricItem { name: mname, value: sample.value, labels });
+                }
+            }
+        }
+        let truncated = items.len() > DEFAULT_TOP;
+        items.truncate(DEFAULT_TOP);
+        (items, truncated)
     };
 
     let mut health = 100.0_f64;
@@ -135,7 +203,7 @@ pub fn summarize_activity(
     let health_score = health.clamp(0.0, 100.0);
 
     let summary = format!(
-        "{error_count} error log(s), {error_or_slow_count} failing trace(s), health {health_score:.0}"
+        "{error_count} error log(s), {error_trace_count} failing trace(s), health {health_score:.0}"
     );
 
     ServiceActivity {
@@ -144,9 +212,14 @@ pub fn summarize_activity(
         observed_through,
         health_score,
         summary,
-        logs: LogsBlock { error_count, top },
-        traces: TracesBlock { error_or_slow_count, notable },
-        truncated: Truncated { logs: logs_truncated, traces: traces_truncated },
+        logs: LogsBlock { error_count, total: log_total, top },
+        traces: TracesBlock { error_trace_count, total: trace_total, notable },
+        metrics: MetricsBlock { notable: metric_items },
+        truncated: Truncated {
+            logs: logs_truncated,
+            traces: traces_truncated,
+            metrics: metrics_truncated,
+        },
     }
 }
 
@@ -191,8 +264,8 @@ pub fn check_health(state: &SharedState) -> HealthOverview {
             let a = summarize_activity(state, &name, None, false);
             let top_issue = if a.logs.error_count > 0 {
                 format!("{} error log(s)", a.logs.error_count)
-            } else if a.traces.error_or_slow_count > 0 {
-                format!("{} failing trace(s)", a.traces.error_or_slow_count)
+            } else if a.traces.error_trace_count > 0 {
+                format!("{} failing trace(s)", a.traces.error_trace_count)
             } else {
                 "No issues detected".to_string()
             };
@@ -280,8 +353,7 @@ pub fn describe_service(state: &SharedState, service: &str) -> ServiceCatalog {
 
     let span_attributes = {
         let store = state.trace_store.read();
-        let mut keys: Vec<String> = Vec::new();
-        let mut seen = FxHashSet::default();
+        let mut keys: std::collections::BTreeSet<String> = Default::default();
         if let Some(spur) = store.interner.get(service)
             && let Some(trace_ids) = store.service_index.get(&spur)
         {
@@ -290,18 +362,14 @@ pub fn describe_service(state: &SharedState, service: &str) -> ServiceCatalog {
                     for span in spans {
                         if span.service_name == spur {
                             for (k, _) in &span.attributes {
-                                let key = store.interner.resolve(k).to_string();
-                                if seen.insert(key.clone()) {
-                                    keys.push(key);
-                                }
+                                keys.insert(store.interner.resolve(k).to_string());
                             }
                         }
                     }
                 }
             }
         }
-        keys.sort();
-        keys
+        keys.into_iter().collect()
     };
 
     ServiceCatalog { service: service.to_string(), metrics, log_labels, span_attributes }
@@ -348,12 +416,20 @@ pub fn build_trace_tree(state: &SharedState, trace_id: &[u8; 16]) -> Option<Trac
         spans: &[crate::store::trace_store::Span],
         children_of: &std::collections::HashMap<[u8; 8], Vec<usize>>,
         store: &crate::store::TraceStore,
+        depth: u32,
     ) -> SpanNode {
+        const MAX_DEPTH: u32 = 128;
         let s = &spans[idx];
-        let mut children: Vec<SpanNode> = children_of
-            .get(&s.span_id)
-            .map(|kids| kids.iter().map(|&c| node(c, spans, children_of, store)).collect())
-            .unwrap_or_default();
+        let mut children: Vec<SpanNode> = if depth + 1 < MAX_DEPTH {
+            children_of
+                .get(&s.span_id)
+                .map(|kids| {
+                    kids.iter().map(|&c| node(c, spans, children_of, store, depth + 1)).collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         children.sort_by_key(|c| c.start_time_ns);
         SpanNode {
             span_id: s.span_id.iter().map(|b| format!("{b:02x}")).collect(),
@@ -372,7 +448,7 @@ pub fn build_trace_tree(state: &SharedState, trace_id: &[u8; 16]) -> Option<Trac
     }
 
     let mut root_nodes: Vec<SpanNode> =
-        roots.iter().map(|&r| node(r, spans, &children_of, &store)).collect();
+        roots.iter().map(|&r| node(r, spans, &children_of, &store, 0)).collect();
     root_nodes.sort_by_key(|n| n.start_time_ns);
     Some(TraceTree {
         trace_id: trace_id.iter().map(|b| format!("{b:02x}")).collect(),
@@ -489,5 +565,98 @@ mod tests {
         assert_eq!(tree.roots[0].name, "root");
         assert_eq!(tree.roots[0].children.len(), 1);
         assert_eq!(tree.roots[0].children[0].name, "child");
+    }
+
+    #[test]
+    fn summarize_surfaces_error_metrics() {
+        use crate::store::metric_store::Sample;
+        let st = state();
+        {
+            let mut m = st.metric_store.write();
+            m.ingest_samples(
+                "http_errors_total",
+                vec![("service".into(), "api".into())],
+                vec![Sample { timestamp_ms: 1, value: 5.0, ingest_seq: 0 }],
+            );
+        }
+        let a = summarize_activity(&st, "api", None, false);
+        assert!(a.metrics.notable.iter().any(|m| m.name == "http_errors_total"));
+    }
+
+    #[test]
+    fn summarize_reports_log_total_across_levels() {
+        let st = state();
+        {
+            let mut logs = st.log_store.write();
+            logs.ingest_stream(
+                vec![("service".into(), "api".into()), ("level".into(), "info".into())],
+                vec![LogEntry { timestamp_ns: 1, line: "ok".into(), ingest_seq: 0 }],
+            );
+            logs.ingest_stream(
+                vec![("service".into(), "api".into()), ("level".into(), "error".into())],
+                vec![LogEntry { timestamp_ns: 2, line: "bad".into(), ingest_seq: 1 }],
+            );
+        }
+        let a = summarize_activity(&st, "api", None, false);
+        assert_eq!(a.logs.error_count, 1);
+        assert_eq!(a.logs.total, 2); // total across ALL levels
+    }
+
+    #[test]
+    fn build_trace_tree_caps_depth() {
+        use crate::store::trace_store::{Span, SpanKind, SpanStatus};
+        let st = state();
+        let tid = [2u8; 16];
+        {
+            let mut traces = st.trace_store.write();
+            let svc = traces.interner.get_or_intern("api");
+            let nm = traces.interner.get_or_intern("s");
+            let id_of = |i: usize| {
+                let mut b = [0u8; 8];
+                b[0] = (i & 0xff) as u8;
+                b[1] = ((i >> 8) & 0xff) as u8;
+                b
+            };
+            let n = 300usize;
+            let mut spans = Vec::new();
+            for i in 0..n {
+                let parent = if i == 0 { None } else { Some(id_of(i - 1)) };
+                spans.push(Span {
+                    trace_id: tid, span_id: id_of(i), parent_span_id: parent,
+                    name: nm, service_name: svc, start_time_ns: i as i64, duration_ns: 1,
+                    status: SpanStatus::Ok, kind: SpanKind::Internal,
+                    attributes: Default::default(), events: vec![], ingest_seq: i as u64,
+                });
+            }
+            traces.ingest_spans(spans);
+        }
+        let tree = build_trace_tree(&st, &tid).expect("trace exists");
+        fn depth(n: &SpanNode) -> usize { 1 + n.children.iter().map(depth).max().unwrap_or(0) }
+        let d = tree.roots.iter().map(depth).max().unwrap_or(0);
+        assert!(d <= 128, "tree depth {d} exceeds the cap of 128");
+        assert!(d >= 2, "tree should still nest");
+    }
+
+    #[test]
+    fn build_trace_tree_cycle_does_not_hang() {
+        use crate::store::trace_store::{Span, SpanKind, SpanStatus};
+        let st = state();
+        let tid = [3u8; 16];
+        let a = [1u8; 8];
+        let b = [2u8; 8];
+        {
+            let mut traces = st.trace_store.write();
+            let svc = traces.interner.get_or_intern("api");
+            let nm = traces.interner.get_or_intern("s");
+            let mk = |span_id: [u8; 8], parent: [u8; 8]| Span {
+                trace_id: tid, span_id, parent_span_id: Some(parent),
+                name: nm, service_name: svc, start_time_ns: 0, duration_ns: 1,
+                status: SpanStatus::Ok, kind: SpanKind::Internal,
+                attributes: Default::default(), events: vec![], ingest_seq: 0,
+            };
+            traces.ingest_spans(vec![mk(a, b), mk(b, a)]);
+        }
+        let tree = build_trace_tree(&st, &tid).expect("trace exists");
+        assert!(tree.roots.is_empty(), "mutually-cyclic spans have no valid root");
     }
 }
