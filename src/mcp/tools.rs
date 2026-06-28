@@ -12,7 +12,15 @@ use crate::query::traceql::parser::parse_traceql;
 use crate::store::SharedState;
 
 /// Server-level instructions injected at `initialize` (the agent loop).
-pub const INSTRUCTIONS: &str = "Aniani MCP — local observability for your dev loop.";
+pub const INSTRUCTIONS: &str = "\
+Aniani is your local observability instrument for the dev loop. Recommended flow:
+1. reset(scope=all) for a clean baseline before a run.
+2. Run your code/tests. Telemetry export may lag a moment — if a summary looks empty, wait briefly and retry.
+3. summarize_activity(service) to see what the run produced: error logs, failing/slow traces, error metrics, health score.
+4. Drill in: describe_service(service) to learn queryable labels/metrics, then query_logs / query_traces / query_metrics / get_trace.
+5. To compare iterations without wiping, call mark_checkpoint() before a run and pass the returned token as `since` to summarize_activity.
+Use check_health() when you don't yet know which service is in trouble, and list_services() to see what is reporting. \
+summarize_activity/describe_service return an error listing known services if you name one that has produced no telemetry.";
 
 /// One read-only tool annotation block (closed in-memory domain).
 fn read_only(title: &str) -> Value {
@@ -1251,6 +1259,13 @@ mod tests {
             .unwrap();
         let attrs = droots[0]["attributes"].as_array().unwrap();
         assert!(!attrs.is_empty(), "detailed includes attributes");
+    }
+
+    #[test]
+    fn instructions_mention_the_loop() {
+        assert!(INSTRUCTIONS.contains("reset"));
+        assert!(INSTRUCTIONS.contains("summarize_activity"));
+        assert!(INSTRUCTIONS.contains("mark_checkpoint"));
     }
 
     #[test]
