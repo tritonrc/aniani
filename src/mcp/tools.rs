@@ -377,7 +377,16 @@ fn handle_summarize_activity(state: &SharedState, id: Option<Value>, args: &Valu
 
 fn handle_check_health(state: &SharedState, id: Option<Value>) -> Value {
     let overview = synth::check_health(state);
-    let text = format!("{} service(s) ranked worst-first", overview.services.len());
+    let text = match overview.services.first() {
+        Some(worst) => format!(
+            "{} service(s) ranked worst-first; worst: {} (health {:.0}, {})",
+            overview.services.len(),
+            worst.service,
+            worst.health_score,
+            worst.top_issue
+        ),
+        None => "no services reporting telemetry yet".to_string(),
+    };
     match serde_json::to_value(&overview) {
         Ok(v) => tool_ok(id, v, text),
         Err(e) => tool_err(id, format!("serialization error: {e}")),
