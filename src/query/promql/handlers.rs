@@ -430,7 +430,7 @@ fn now_ms() -> i64 {
     }
 }
 
-fn parse_timestamp_ms(s: &str) -> Option<i64> {
+pub(crate) fn parse_timestamp_ms(s: &str) -> Option<i64> {
     // Try as integer first — classify by magnitude
     if let Ok(n) = s.parse::<i64>() {
         return Some(classify_to_ms(n));

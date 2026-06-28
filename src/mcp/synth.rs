@@ -6,6 +6,7 @@ use crate::store::trace_store::SpanStatus;
 use crate::store::{LabelMatchOp, LabelMatcher, SharedState};
 
 const DEFAULT_TOP: usize = 20;
+const DETAILED_TOP: usize = 100;
 const MAX_LABEL_VALUES: usize = 50;
 
 // ---------- summarize_activity ----------
@@ -81,15 +82,17 @@ fn svc_error_matchers(service: &str) -> Vec<LabelMatcher> {
 }
 
 /// Summarize a single service's activity, optionally only entries ingested at or
-/// after `since` (an ingest-sequence token). `_detail` reserved for future use.
+/// after `since` (an ingest-sequence token). `detailed` raises the per-block item
+/// cap so triage can surface more of the highest-signal entries.
 pub fn summarize_activity(
     state: &SharedState,
     service: &str,
     since: Option<u64>,
-    _detail: bool,
+    detailed: bool,
 ) -> ServiceActivity {
     let observed_through = state.ingest_seq.load(std::sync::atomic::Ordering::Relaxed);
     let keep = |seq: u64| since.map(|s| seq >= s).unwrap_or(true);
+    let top_n = if detailed { DETAILED_TOP } else { DEFAULT_TOP };
 
     // --- Logs: total across all levels + error stream items ---
     let (error_count, log_total, mut error_items) = {
@@ -118,10 +121,10 @@ pub fn summarize_activity(
         (items.len(), total, items)
     };
     error_items.sort_by_key(|b| std::cmp::Reverse(b.0));
-    let logs_truncated = error_items.len() > DEFAULT_TOP;
+    let logs_truncated = error_items.len() > top_n;
     let top: Vec<LogItem> = error_items
         .into_iter()
-        .take(DEFAULT_TOP)
+        .take(top_n)
         .map(|(ts, line)| LogItem {
             ts: (ts / 1_000_000).to_string(),
             line,
@@ -166,8 +169,8 @@ pub fn summarize_activity(
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         let count = notable.len();
-        let truncated = notable.len() > DEFAULT_TOP;
-        notable.truncate(DEFAULT_TOP);
+        let truncated = notable.len() > top_n;
+        notable.truncate(top_n);
         let ratio = if total_spans > 0 {
             error_spans as f64 / total_spans as f64
         } else {
@@ -220,8 +223,8 @@ pub fn summarize_activity(
                 }
             }
         }
-        let truncated = items.len() > DEFAULT_TOP;
-        items.truncate(DEFAULT_TOP);
+        let truncated = items.len() > top_n;
+        items.truncate(top_n);
         (items, truncated)
     };
 
@@ -445,12 +448,37 @@ pub struct SpanNode {
     pub start_time_ns: i64,
     pub duration_ms: f64,
     pub status: String,
+    /// Span attributes, populated only in `detailed` mode (empty in `concise`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub attributes: Vec<(String, String)>,
     pub children: Vec<SpanNode>,
 }
 
 /// Build a parent/child span tree for one trace. Spans whose parent is absent
 /// (or who have no parent) become roots.
-pub fn build_trace_tree(state: &SharedState, trace_id: &[u8; 16]) -> Option<TraceTree> {
+/// Summarize one trace for `query_traces`: root span, total duration, and the
+/// number of error spans. Returns `None` if the trace has no spans.
+pub fn trace_item(state: &SharedState, trace_id: &[u8; 16]) -> Option<TraceItem> {
+    let store = state.trace_store.read();
+    let spans = store.get_trace(trace_id)?;
+    let error_span_count = spans
+        .iter()
+        .filter(|s| s.status == SpanStatus::Error)
+        .count();
+    let r = store.trace_result(trace_id)?;
+    Some(TraceItem {
+        trace_id: trace_id.iter().map(|b| format!("{b:02x}")).collect(),
+        root_span_name: r.root_span_name,
+        duration_ms: r.duration_ns as f64 / 1_000_000.0,
+        error_span_count,
+    })
+}
+
+pub fn build_trace_tree(
+    state: &SharedState,
+    trace_id: &[u8; 16],
+    detailed: bool,
+) -> Option<TraceTree> {
     use std::collections::{HashMap, HashSet};
 
     let store = state.trace_store.read();
@@ -472,6 +500,7 @@ pub fn build_trace_tree(state: &SharedState, trace_id: &[u8; 16]) -> Option<Trac
         children_of: &std::collections::HashMap<[u8; 8], Vec<usize>>,
         store: &crate::store::TraceStore,
         depth: u32,
+        detailed: bool,
     ) -> SpanNode {
         const MAX_DEPTH: u32 = 128;
         let s = &spans[idx];
@@ -480,7 +509,7 @@ pub fn build_trace_tree(state: &SharedState, trace_id: &[u8; 16]) -> Option<Trac
                 .get(&s.span_id)
                 .map(|kids| {
                     kids.iter()
-                        .map(|&c| node(c, spans, children_of, store, depth + 1))
+                        .map(|&c| node(c, spans, children_of, store, depth + 1, detailed))
                         .collect()
                 })
                 .unwrap_or_default()
@@ -488,6 +517,19 @@ pub fn build_trace_tree(state: &SharedState, trace_id: &[u8; 16]) -> Option<Trac
             Vec::new()
         };
         children.sort_by_key(|c| c.start_time_ns);
+        let attributes = if detailed {
+            s.attributes
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        store.resolve(k).to_string(),
+                        store.resolve_attribute_value(v),
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         SpanNode {
             span_id: s.span_id.iter().map(|b| format!("{b:02x}")).collect(),
             name: store.resolve(&s.name).to_string(),
@@ -500,13 +542,14 @@ pub fn build_trace_tree(state: &SharedState, trace_id: &[u8; 16]) -> Option<Trac
                 crate::store::trace_store::SpanStatus::Unset => "unset",
             }
             .to_string(),
+            attributes,
             children,
         }
     }
 
     let mut root_nodes: Vec<SpanNode> = roots
         .iter()
-        .map(|&r| node(r, spans, &children_of, &store, 0))
+        .map(|&r| node(r, spans, &children_of, &store, 0, detailed))
         .collect();
     root_nodes.sort_by_key(|n| n.start_time_ns);
     Some(TraceTree {
@@ -664,7 +707,7 @@ mod tests {
             };
             traces.ingest_spans(vec![root, child]);
         }
-        let tree = build_trace_tree(&st, &tid).expect("trace exists");
+        let tree = build_trace_tree(&st, &tid, false).expect("trace exists");
         assert_eq!(tree.roots.len(), 1);
         assert_eq!(tree.roots[0].name, "root");
         assert_eq!(tree.roots[0].children.len(), 1);
@@ -765,7 +808,7 @@ mod tests {
             }
             traces.ingest_spans(spans);
         }
-        let tree = build_trace_tree(&st, &tid).expect("trace exists");
+        let tree = build_trace_tree(&st, &tid, false).expect("trace exists");
         fn depth(n: &SpanNode) -> usize {
             1 + n.children.iter().map(depth).max().unwrap_or(0)
         }
@@ -801,7 +844,7 @@ mod tests {
             };
             traces.ingest_spans(vec![mk(a, b), mk(b, a)]);
         }
-        let tree = build_trace_tree(&st, &tid).expect("trace exists");
+        let tree = build_trace_tree(&st, &tid, false).expect("trace exists");
         assert!(
             tree.roots.is_empty(),
             "mutually-cyclic spans have no valid root"

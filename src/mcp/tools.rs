@@ -6,7 +6,7 @@ use crate::mcp::protocol;
 use crate::mcp::synth;
 use crate::query::logql::eval::{LogQLResult, evaluate_logql_limited};
 use crate::query::logql::parser::parse_logql;
-use crate::query::promql::eval::{PromQLResult, evaluate_instant};
+use crate::query::promql::eval::{PromQLResult, evaluate_instant, evaluate_range};
 use crate::query::traceql::eval::evaluate_traceql;
 use crate::query::traceql::parser::parse_traceql;
 use crate::store::SharedState;
@@ -34,6 +34,15 @@ fn descriptors() -> Vec<Value> {
                 },
                 "required": ["scope"]
             },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "scope": { "type": "string" },
+                    "service": { "type": "string" },
+                    "checkpoint": { "type": "integer" }
+                },
+                "required": ["scope", "checkpoint"]
+            },
             "annotations": { "title": "Reset Telemetry Store", "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false }
         }),
         json!({
@@ -41,6 +50,11 @@ fn descriptors() -> Vec<Value> {
             "title": "Mark Checkpoint",
             "description": "Return an opaque monotonic checkpoint token for 'now'. Pass it later as `since` to scope a summary to telemetry ingested after this point. Not a wall-clock time.",
             "inputSchema": { "type": "object", "properties": {} },
+            "outputSchema": {
+                "type": "object",
+                "properties": { "checkpoint": { "type": "integer" } },
+                "required": ["checkpoint"]
+            },
             "annotations": read_only("Mark Checkpoint")
         }),
         json!({
@@ -56,6 +70,21 @@ fn descriptors() -> Vec<Value> {
                 },
                 "required": ["service"]
             },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "service": { "type": "string" },
+                    "since": { "type": ["integer", "null"] },
+                    "observed_through": { "type": "integer" },
+                    "health_score": { "type": "number" },
+                    "summary": { "type": "string" },
+                    "logs": { "type": "object" },
+                    "traces": { "type": "object" },
+                    "metrics": { "type": "object" },
+                    "truncated": { "type": "object" }
+                },
+                "required": ["service", "health_score", "summary"]
+            },
             "annotations": read_only("Summarize Service Activity")
         }),
         json!({
@@ -63,6 +92,11 @@ fn descriptors() -> Vec<Value> {
             "title": "Check Global Health",
             "description": "Rank every known service by health, worst first. Use when you don't yet know which service is in trouble.",
             "inputSchema": { "type": "object", "properties": {} },
+            "outputSchema": {
+                "type": "object",
+                "properties": { "services": { "type": "array", "items": { "type": "object" } } },
+                "required": ["services"]
+            },
             "annotations": read_only("Check Global Health")
         }),
         json!({
@@ -76,6 +110,16 @@ fn descriptors() -> Vec<Value> {
                     "contains": { "type": "string" },
                     "limit": { "type": "integer" }, "logql": { "type": "string" }
                 }
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "logs": { "type": "array", "items": { "type": "object" } },
+                    "shown": { "type": "integer" },
+                    "total_count": { "type": "integer" },
+                    "truncated": { "type": "boolean" }
+                },
+                "required": ["logs", "shown", "total_count", "truncated"]
             },
             "annotations": read_only("Query Logs")
         }),
@@ -92,12 +136,22 @@ fn descriptors() -> Vec<Value> {
                     "traceql": { "type": "string" }
                 }
             },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "traces": { "type": "array", "items": { "type": "object" } },
+                    "shown": { "type": "integer" },
+                    "total_count": { "type": "integer" },
+                    "truncated": { "type": "boolean" }
+                },
+                "required": ["traces", "shown", "total_count", "truncated"]
+            },
             "annotations": read_only("Query Traces")
         }),
         json!({
             "name": "query_metrics",
             "title": "Query Metrics",
-            "description": "Run a raw PromQL query (e.g. rate(http_requests_total[5m])). Optional start/end/step (RFC3339 or unix seconds) for a range query; omit for an instant query.",
+            "description": "Run a raw PromQL query (e.g. rate(http_requests_total[5m])). For a range query pass all of start/end (unix seconds, or ms/ns) and step (a duration like 15s or 1m); omit all three for an instant query at now.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -105,6 +159,13 @@ fn descriptors() -> Vec<Value> {
                     "start": { "type": "string" }, "end": { "type": "string" }, "step": { "type": "string" }
                 },
                 "required": ["promql"]
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "series": { "type": "array", "items": { "type": "object" } },
+                    "scalar": { "type": "number" }
+                }
             },
             "annotations": read_only("Query Metrics")
         }),
@@ -120,6 +181,14 @@ fn descriptors() -> Vec<Value> {
                 },
                 "required": ["trace_id"]
             },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "trace_id": { "type": "string" },
+                    "roots": { "type": "array", "items": { "type": "object" } }
+                },
+                "required": ["trace_id", "roots"]
+            },
             "annotations": read_only("Get Trace Tree")
         }),
         json!({
@@ -127,6 +196,11 @@ fn descriptors() -> Vec<Value> {
             "title": "List Services",
             "description": "List every service reporting telemetry and which signals (logs/metrics/traces) each has.",
             "inputSchema": { "type": "object", "properties": {} },
+            "outputSchema": {
+                "type": "object",
+                "properties": { "services": { "type": "array", "items": { "type": "object" } } },
+                "required": ["services"]
+            },
             "annotations": read_only("List Services")
         }),
         json!({
@@ -136,6 +210,16 @@ fn descriptors() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": { "service": { "type": "string" } },
+                "required": ["service"]
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "service": { "type": "string" },
+                    "metrics": { "type": "array" },
+                    "log_labels": { "type": "array" },
+                    "span_attributes": { "type": "array" }
+                },
                 "required": ["service"]
             },
             "annotations": read_only("Describe Service")
@@ -195,6 +279,46 @@ pub fn call(state: &SharedState, id: Option<Value>, params: &Value) -> Value {
     }
 }
 
+/// All service names reporting any signal (logs, metrics, traces), sorted unique.
+fn known_services(state: &SharedState) -> Vec<String> {
+    use rustc_hash::FxHashSet;
+    let mut set: FxHashSet<String> = FxHashSet::default();
+    set.extend(state.log_store.read().get_label_values("service"));
+    set.extend(state.metric_store.read().get_label_values("service"));
+    set.extend(state.trace_store.read().service_names());
+    let mut v: Vec<String> = set.into_iter().collect();
+    v.sort_unstable();
+    v
+}
+
+/// Require a non-empty `service` that actually reports telemetry. On failure
+/// returns a model-visible `isError` result that echoes the bad value and lists
+/// valid services (per the §5 self-correction contract).
+fn require_known_service(
+    state: &SharedState,
+    id: &Option<Value>,
+    args: &Value,
+) -> Result<String, Value> {
+    let service = match args.get("service").and_then(|v| v.as_str()) {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => return Err(tool_err(id.clone(), "`service` is required".into())),
+    };
+    let known = known_services(state);
+    if known.iter().any(|s| s == &service) {
+        Ok(service)
+    } else {
+        let valid = if known.is_empty() {
+            "none yet".to_string()
+        } else {
+            known.join(", ")
+        };
+        Err(tool_err(
+            id.clone(),
+            format!("unknown service \"{service}\". Known services: {valid}"),
+        ))
+    }
+}
+
 fn handle_reset(state: &SharedState, id: Option<Value>, args: &Value) -> Value {
     let scope = args.get("scope").and_then(|v| v.as_str());
     match scope {
@@ -215,7 +339,11 @@ fn handle_reset(state: &SharedState, id: Option<Value>, args: &Value) -> Value {
         _ => return tool_err(id, "scope must be 'all' or 'service'".into()),
     }
     let checkpoint = state.ingest_seq.load(std::sync::atomic::Ordering::Relaxed);
-    let structured = json!({ "scope": scope, "checkpoint": checkpoint });
+    let service = args.get("service").and_then(|v| v.as_str());
+    let mut structured = json!({ "scope": scope, "checkpoint": checkpoint });
+    if scope == Some("service") {
+        structured["service"] = json!(service);
+    }
     tool_ok(
         id,
         structured,
@@ -233,9 +361,9 @@ fn handle_mark_checkpoint(state: &SharedState, id: Option<Value>) -> Value {
 }
 
 fn handle_summarize_activity(state: &SharedState, id: Option<Value>, args: &Value) -> Value {
-    let service = match args.get("service").and_then(|v| v.as_str()) {
-        Some(s) if !s.is_empty() => s.to_string(),
-        _ => return tool_err(id, "`service` is required".into()),
+    let service = match require_known_service(state, &id, args) {
+        Ok(s) => s,
+        Err(e) => return e,
     };
     let since = args.get("since").and_then(|v| v.as_u64());
     let detail = args.get("detail").and_then(|v| v.as_str()) == Some("detailed");
@@ -257,9 +385,9 @@ fn handle_check_health(state: &SharedState, id: Option<Value>) -> Value {
 }
 
 fn handle_describe_service(state: &SharedState, id: Option<Value>, args: &Value) -> Value {
-    let service = match args.get("service").and_then(|v| v.as_str()) {
-        Some(s) if !s.is_empty() => s.to_string(),
-        _ => return tool_err(id, "`service` is required".into()),
+    let service = match require_known_service(state, &id, args) {
+        Ok(s) => s,
+        Err(e) => return e,
     };
     let cat = synth::describe_service(state, &service);
     let text = format!(
@@ -371,16 +499,27 @@ fn handle_query_logs(state: &SharedState, id: Option<Value>, args: &Value) -> Va
         }
     }
     let truncated = out.len() > limit;
+    // Exact total is only needed (and only worth a full scan) when truncated.
+    let total_count = if truncated {
+        match evaluate_logql_limited(&expr, &store, i64::MIN, i64::MAX, None, None) {
+            LogQLResult::Streams(all) => all.iter().map(|s| s.entries.len()).sum(),
+            LogQLResult::Matrix(_) => out.len(),
+        }
+    } else {
+        out.len()
+    };
     out.truncate(limit);
     let shown = out.len();
-    let text = format!(
-        "{} log line(s){}",
-        shown,
-        if truncated { " (truncated)" } else { "" }
-    );
+    let text = if truncated {
+        format!(
+            "showing {shown} of {total_count} log line(s) — narrow `contains`/`level` or raise `limit`"
+        )
+    } else {
+        format!("{shown} log line(s)")
+    };
     tool_ok(
         id,
-        json!({ "logs": out, "shown": shown, "truncated": truncated }),
+        json!({ "logs": out, "shown": shown, "total_count": total_count, "truncated": truncated }),
         text,
     )
 }
@@ -426,33 +565,32 @@ fn handle_query_traces(state: &SharedState, id: Option<Value>, args: &Value) -> 
             );
         }
     };
-    let store = state.trace_store.read();
-    let mut results = evaluate_traceql(&expr, &store);
-    let total = results.len();
+    // Collect matched trace IDs under the eval lock, then drop it before
+    // summarizing each (synth::trace_item takes its own read lock).
+    let trace_ids: Vec<[u8; 16]> = {
+        let store = state.trace_store.read();
+        evaluate_traceql(&expr, &store)
+            .into_iter()
+            .map(|r| r.trace_id)
+            .collect()
+    };
+    let total = trace_ids.len();
     let truncated = total > limit;
-    results.truncate(limit);
-    let out: Vec<Value> = results
+    let out: Vec<Value> = trace_ids
         .iter()
-        .map(|r| {
-            json!({
-                "trace_id": r.trace_id.iter().map(|b| format!("{b:02x}")).collect::<String>(),
-                "matched_spans": r.matched_spans.iter().map(|m| json!({
-                    "span_id": m.span_id.iter().map(|b| format!("{b:02x}")).collect::<String>(),
-                    "name": m.name,
-                    "service": m.service_name,
-                    "duration_ms": m.duration_ns as f64 / 1_000_000.0,
-                })).collect::<Vec<_>>(),
-            })
-        })
+        .take(limit)
+        .filter_map(|tid| synth::trace_item(state, tid))
+        .filter_map(|t| serde_json::to_value(&t).ok())
         .collect();
-    let text = format!(
-        "{} trace(s){}",
-        out.len(),
-        if truncated { " (truncated)" } else { "" }
-    );
+    let shown = out.len();
+    let text = if truncated {
+        format!("showing {shown} of {total} trace(s) — narrow filters or raise `limit`")
+    } else {
+        format!("{shown} trace(s)")
+    };
     tool_ok(
         id,
-        json!({ "traces": out, "shown": out.len(), "total_count": total, "truncated": truncated }),
+        json!({ "traces": out, "shown": shown, "total_count": total, "truncated": truncated }),
         text,
     )
 }
@@ -462,19 +600,46 @@ fn handle_query_metrics(state: &SharedState, id: Option<Value>, args: &Value) ->
         Some(q) if !q.is_empty() => q,
         _ => return tool_err(id, "`promql` is required".into()),
     };
-    let now_ms = {
-        let ns = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        if ns > i64::MAX as u128 {
-            i64::MAX
-        } else {
-            ns as i64
-        }
-    };
+    let start = args.get("start").and_then(|v| v.as_str());
+    let end = args.get("end").and_then(|v| v.as_str());
+    let step = args.get("step").and_then(|v| v.as_str());
     let store = state.metric_store.read();
-    let result = match evaluate_instant(promql, &store, now_ms) {
+    let eval_result = if start.is_some() || end.is_some() || step.is_some() {
+        // Range query: all three are required together.
+        let (Some(start), Some(end), Some(step)) = (start, end, step) else {
+            return tool_err(
+                id,
+                "a range query requires all of `start`, `end`, `step` (omit all three for an instant query)".into(),
+            );
+        };
+        let start_ms = match crate::query::promql::handlers::parse_timestamp_ms(start) {
+            Some(t) => t,
+            None => return tool_err(id, format!("invalid `start`: {start}")),
+        };
+        let end_ms = match crate::query::promql::handlers::parse_timestamp_ms(end) {
+            Some(t) => t,
+            None => return tool_err(id, format!("invalid `end`: {end}")),
+        };
+        let step_ms = match crate::config::parse_duration(step).map(|d| d.as_millis() as i64) {
+            Some(s) if s > 0 => s,
+            _ => return tool_err(id, format!("invalid `step`: {step}")),
+        };
+        evaluate_range(promql, &store, start_ms, end_ms, step_ms)
+    } else {
+        let now_ms = {
+            let ns = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            if ns > i64::MAX as u128 {
+                i64::MAX
+            } else {
+                ns as i64
+            }
+        };
+        evaluate_instant(promql, &store, now_ms)
+    };
+    let result = match eval_result {
         Ok(r) => r,
         Err(e) => {
             return tool_err(
@@ -518,7 +683,8 @@ fn handle_get_trace(state: &SharedState, id: Option<Value>, args: &Value) -> Val
             Err(_) => return tool_err(id, "trace_id is not valid hex".into()),
         }
     }
-    match synth::build_trace_tree(state, &bytes) {
+    let detailed = args.get("detail").and_then(|v| v.as_str()) == Some("detailed");
+    match synth::build_trace_tree(state, &bytes, detailed) {
         Some(tree) => {
             let text = format!(
                 "trace {} with {} root span(s)",
@@ -873,5 +1039,184 @@ mod tests {
             &json!({ "name": "query_logs", "arguments": { "contains": "boom" } }),
         );
         assert_eq!(resp["result"]["isError"], json!(true));
+    }
+
+    fn seed_api_logs(st: &crate::store::SharedState, n: i64) {
+        let mut logs = st.log_store.write();
+        let entries: Vec<crate::store::log_store::LogEntry> = (1..=n)
+            .map(|i| crate::store::log_store::LogEntry {
+                timestamp_ns: i,
+                line: format!("line {i}"),
+                ingest_seq: 0,
+            })
+            .collect();
+        logs.ingest_stream(vec![("service".into(), "api".into())], entries);
+    }
+
+    #[test]
+    fn query_logs_reports_total_count_and_hint() {
+        let st = tests_state();
+        seed_api_logs(&st, 60);
+        let resp = call(
+            &st,
+            Some(json!(1)),
+            &json!({ "name": "query_logs", "arguments": { "service": "api", "limit": 50 } }),
+        );
+        let sc = &resp["result"]["structuredContent"];
+        assert_eq!(sc["shown"], json!(50));
+        assert_eq!(sc["total_count"], json!(60));
+        assert_eq!(sc["truncated"], json!(true));
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("60"), "hint should mention total: {text}");
+    }
+
+    #[test]
+    fn summarize_unknown_service_is_error_listing_valid() {
+        let st = tests_state();
+        seed_api_logs(&st, 1);
+        let resp = call(
+            &st,
+            Some(json!(1)),
+            &json!({ "name": "summarize_activity", "arguments": { "service": "ghost" } }),
+        );
+        assert_eq!(resp["result"]["isError"], json!(true));
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("ghost"), "echo bad value: {text}");
+        assert!(text.contains("api"), "list valid services: {text}");
+    }
+
+    #[test]
+    fn describe_unknown_service_is_error() {
+        let st = tests_state();
+        seed_api_logs(&st, 1);
+        let resp = call(
+            &st,
+            Some(json!(1)),
+            &json!({ "name": "describe_service", "arguments": { "service": "ghost" } }),
+        );
+        assert_eq!(resp["result"]["isError"], json!(true));
+    }
+
+    #[test]
+    fn reset_service_scope_echoes_service() {
+        let st = tests_state();
+        seed_api_logs(&st, 1);
+        let resp = call(
+            &st,
+            Some(json!(1)),
+            &json!({ "name": "reset", "arguments": { "scope": "service", "service": "api" } }),
+        );
+        assert_eq!(resp["result"]["isError"], json!(false));
+        assert_eq!(resp["result"]["structuredContent"]["service"], json!("api"));
+    }
+
+    #[test]
+    fn query_metrics_range_invalid_time_is_error() {
+        let st = tests_state();
+        let resp = call(
+            &st,
+            Some(json!(1)),
+            &json!({ "name": "query_metrics", "arguments": {
+                "promql": "1", "start": "not-a-time", "end": "100", "step": "15s"
+            } }),
+        );
+        assert_eq!(resp["result"]["isError"], json!(true));
+    }
+
+    fn seed_error_trace(st: &crate::store::SharedState) -> [u8; 16] {
+        use crate::store::trace_store::{Span, SpanKind, SpanStatus};
+        use smallvec::smallvec;
+        let tid = [7u8; 16];
+        let mut traces = st.trace_store.write();
+        let rname = traces.interner.get_or_intern("GET /api");
+        let svc = traces.interner.get_or_intern("api");
+        let akey = traces.interner.get_or_intern("http.method");
+        let aval =
+            crate::store::trace_store::AttributeValue::String(traces.interner.get_or_intern("GET"));
+        // Real OTLP ingestion promotes resource attrs to `resource.*` span
+        // attributes; TraceQL `resource.service.name` matches against those.
+        let svc_key = traces.interner.get_or_intern("resource.service.name");
+        let svc_val =
+            crate::store::trace_store::AttributeValue::String(traces.interner.get_or_intern("api"));
+        let root = Span {
+            trace_id: tid,
+            span_id: [1u8; 8],
+            parent_span_id: None,
+            name: rname,
+            service_name: svc,
+            start_time_ns: 0,
+            duration_ns: 5_000_000,
+            status: SpanStatus::Error,
+            kind: SpanKind::Server,
+            attributes: smallvec![(akey, aval), (svc_key, svc_val)],
+            events: vec![],
+            ingest_seq: 0,
+        };
+        traces.ingest_spans(vec![root]);
+        tid
+    }
+
+    #[test]
+    fn query_traces_returns_trace_level_summary() {
+        let st = tests_state();
+        seed_error_trace(&st);
+        let resp = call(
+            &st,
+            Some(json!(1)),
+            &json!({ "name": "query_traces", "arguments": { "service": "api" } }),
+        );
+        assert_eq!(resp["result"]["isError"], json!(false));
+        let traces = resp["result"]["structuredContent"]["traces"]
+            .as_array()
+            .unwrap();
+        assert_eq!(traces.len(), 1);
+        assert_eq!(traces[0]["root_span_name"], json!("GET /api"));
+        assert_eq!(traces[0]["error_span_count"], json!(1));
+        assert!(traces[0]["trace_id"].is_string());
+    }
+
+    #[test]
+    fn get_trace_detail_controls_attributes() {
+        let st = tests_state();
+        let tid = seed_error_trace(&st);
+        let hex: String = tid.iter().map(|b| format!("{b:02x}")).collect();
+        let concise = call(
+            &st,
+            Some(json!(1)),
+            &json!({ "name": "get_trace", "arguments": { "trace_id": hex } }),
+        );
+        let roots = concise["result"]["structuredContent"]["roots"]
+            .as_array()
+            .unwrap();
+        assert!(
+            roots[0]["attributes"]
+                .as_array()
+                .map(|a| a.is_empty())
+                .unwrap_or(true),
+            "concise omits attributes"
+        );
+        let detailed = call(
+            &st,
+            Some(json!(1)),
+            &json!({ "name": "get_trace", "arguments": { "trace_id": hex, "detail": "detailed" } }),
+        );
+        let droots = detailed["result"]["structuredContent"]["roots"]
+            .as_array()
+            .unwrap();
+        let attrs = droots[0]["attributes"].as_array().unwrap();
+        assert!(!attrs.is_empty(), "detailed includes attributes");
+    }
+
+    #[test]
+    fn every_tool_has_output_schema() {
+        let resp = list(Some(json!(1)));
+        let tools = resp["result"]["tools"].as_array().unwrap();
+        for t in tools {
+            assert!(
+                t["outputSchema"].is_object(),
+                "{} missing outputSchema",
+                t["name"]
+            );
+        }
     }
 }
