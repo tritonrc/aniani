@@ -188,6 +188,26 @@ Aniani is designed for programmatic discovery. An agent investigating a system f
 
 **`/api/v1/summary`** returns all errors (logs, metrics, traces) for a service in one response.
 
+### MCP (for agents)
+
+Aniani also speaks the **Model Context Protocol** so a coding agent can drive it as a tool, not via hand-written HTTP. Point any MCP client (Streamable HTTP transport) at:
+
+```
+http://127.0.0.1:4320/mcp
+```
+
+It is always on — no separate process or port — and exposes 10 intent-level tools (one write). The `initialize` handshake returns `instructions` teaching the dev loop:
+
+```
+1. reset(scope=all)             — clean baseline before a run
+2. run your code/tests          — telemetry export may lag a moment
+3. summarize_activity(service)  — triage what the run produced
+4. describe_service + query_*   — drill into logs/traces/metrics
+5. mark_checkpoint() → since    — compare iterations without wiping
+```
+
+Tools: `reset` (the only write), `mark_checkpoint`, `summarize_activity`, `check_health`, `query_logs`, `query_traces`, `query_metrics`, `get_trace`, `list_services`, `describe_service`. Each returns concise text plus typed `structuredContent`; bad queries or unknown services come back as self-correcting tool errors. See `DESIGN.md` for the full surface.
+
 ---
 
 ## Querying
