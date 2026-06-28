@@ -304,6 +304,12 @@ fn handle_list_services(state: &SharedState, id: Option<Value>) -> Value {
     tool_ok(id, json!({ "services": services }), text)
 }
 
+/// Escape a value for safe interpolation inside a double-quoted LogQL/TraceQL
+/// string literal, so caller-supplied filters can't break the generated query.
+fn escape_quoted(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 fn handle_query_logs(state: &SharedState, id: Option<Value>, args: &Value) -> Value {
     let limit = args
         .get("limit")
@@ -316,20 +322,20 @@ fn handle_query_logs(state: &SharedState, id: Option<Value>, args: &Value) -> Va
     } else {
         let mut sel = Vec::new();
         if let Some(s) = args.get("service").and_then(|v| v.as_str()) {
-            sel.push(format!("service=\"{s}\""));
+            sel.push(format!("service=\"{}\"", escape_quoted(s)));
         }
         if let Some(l) = args.get("level").and_then(|v| v.as_str()) {
-            sel.push(format!("level=\"{l}\""));
+            sel.push(format!("level=\"{}\"", escape_quoted(l)));
         }
         if sel.is_empty() {
             return tool_err(
                 id,
-                "provide at least one of service/level/contains, or a raw `logql`".into(),
+                "provide at least `service` or `level` (optionally with `contains`), or a raw `logql`".into(),
             );
         }
         let mut q = format!("{{{}}}", sel.join(", "));
         if let Some(c) = args.get("contains").and_then(|v| v.as_str()) {
-            q.push_str(&format!(" |= \"{c}\""));
+            q.push_str(&format!(" |= \"{}\"", escape_quoted(c)));
         }
         q
     };
@@ -343,28 +349,38 @@ fn handle_query_logs(state: &SharedState, id: Option<Value>, args: &Value) -> Va
         }
     };
     let store = state.log_store.read();
-    let result = evaluate_logql_limited(&expr, &store, i64::MIN, i64::MAX, None, Some(limit));
+    // Probe one past the limit so we can report `truncated` accurately.
+    let result = evaluate_logql_limited(&expr, &store, i64::MIN, i64::MAX, None, Some(limit + 1));
+    let streams = match result {
+        LogQLResult::Streams(streams) => streams,
+        LogQLResult::Matrix(_) => {
+            return tool_err(
+                id,
+                "LogQL metric queries (count_over_time, rate, etc.) are not supported here; \
+                 use query_metrics with a PromQL expression instead."
+                    .into(),
+            );
+        }
+    };
     let mut out: Vec<Value> = Vec::new();
-    if let LogQLResult::Streams(streams) = result {
-        for s in streams {
-            for (ts, line) in s.entries {
-                out.push(
-                    json!({ "ts": (ts / 1_000_000).to_string(), "line": line, "labels": s.labels }),
-                );
-            }
+    for s in streams {
+        for (ts, line) in s.entries {
+            out.push(
+                json!({ "ts": (ts / 1_000_000).to_string(), "line": line, "labels": s.labels }),
+            );
         }
     }
-    let total = out.len();
-    let truncated = total > limit;
+    let truncated = out.len() > limit;
     out.truncate(limit);
+    let shown = out.len();
     let text = format!(
         "{} log line(s){}",
-        out.len(),
+        shown,
         if truncated { " (truncated)" } else { "" }
     );
     tool_ok(
         id,
-        json!({ "logs": out, "shown": out.len(), "total_count": total, "truncated": truncated }),
+        json!({ "logs": out, "shown": shown, "truncated": truncated }),
         text,
     )
 }
@@ -380,7 +396,7 @@ fn handle_query_traces(state: &SharedState, id: Option<Value>, args: &Value) -> 
     } else {
         let mut conds = Vec::new();
         if let Some(s) = args.get("service").and_then(|v| v.as_str()) {
-            conds.push(format!("resource.service.name = \"{s}\""));
+            conds.push(format!("resource.service.name = \"{}\"", escape_quoted(s)));
         }
         if let Some(status) = args.get("status").and_then(|v| v.as_str()) {
             conds.push(format!("status = {status}"));
@@ -389,7 +405,7 @@ fn handle_query_traces(state: &SharedState, id: Option<Value>, args: &Value) -> 
             conds.push(format!("duration > {d}"));
         }
         if let Some(n) = args.get("name").and_then(|v| v.as_str()) {
-            conds.push(format!("name = \"{n}\""));
+            conds.push(format!("name = \"{}\"", escape_quoted(n)));
         }
         if conds.is_empty() {
             return tool_err(
@@ -799,5 +815,63 @@ mod tests {
             &json!({ "name": "get_trace", "arguments": { "trace_id": "zz" } }),
         );
         assert_eq!(bad["result"]["isError"], json!(true));
+    }
+
+    #[test]
+    fn get_trace_valid_but_missing_id_is_error() {
+        let st = tests_state();
+        // 32 valid hex chars that do not exist in the store.
+        let bad = call(
+            &st,
+            Some(json!(1)),
+            &json!({ "name": "get_trace", "arguments": { "trace_id": "0123456789abcdef0123456789abcdef" } }),
+        );
+        assert_eq!(bad["result"]["isError"], json!(true));
+    }
+
+    #[test]
+    fn query_logs_reports_truncated_when_over_limit() {
+        let st = tests_state();
+        {
+            let mut logs = st.log_store.write();
+            let entries: Vec<crate::store::log_store::LogEntry> = (1..=60)
+                .map(|i| crate::store::log_store::LogEntry {
+                    timestamp_ns: i,
+                    line: format!("line {i}"),
+                    ingest_seq: 0,
+                })
+                .collect();
+            logs.ingest_stream(vec![("service".into(), "api".into())], entries);
+        }
+        let resp = call(
+            &st,
+            Some(json!(1)),
+            &json!({ "name": "query_logs", "arguments": { "service": "api", "limit": 50 } }),
+        );
+        let sc = &resp["result"]["structuredContent"];
+        assert_eq!(sc["shown"], json!(50));
+        assert_eq!(sc["truncated"], json!(true));
+    }
+
+    #[test]
+    fn query_logs_rejects_metric_logql() {
+        let st = tests_state();
+        let resp = call(
+            &st,
+            Some(json!(1)),
+            &json!({ "name": "query_logs", "arguments": { "logql": "count_over_time({service=\"api\"}[5m])" } }),
+        );
+        assert_eq!(resp["result"]["isError"], json!(true));
+    }
+
+    #[test]
+    fn query_logs_contains_only_is_error() {
+        let st = tests_state();
+        let resp = call(
+            &st,
+            Some(json!(1)),
+            &json!({ "name": "query_logs", "arguments": { "contains": "boom" } }),
+        );
+        assert_eq!(resp["result"]["isError"], json!(true));
     }
 }
