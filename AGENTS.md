@@ -78,8 +78,17 @@ src/
 │   ├── mod.rs           # routes(): mount POST/GET/DELETE /mcp
 │   ├── protocol.rs      # JSON-RPC envelope types, error codes, protocol-version constants
 │   ├── server.rs        # POST /mcp dispatch + transport compliance (202/batch/origin/version)
-│   ├── tools.rs         # tool descriptors, tools/list, tools/call dispatch, the 10 handlers, instructions
-│   └── synth.rs         # transport-free typed cores (summarize_activity, check_health, describe_service, trace tree)
+│   ├── tools/           # tool descriptors, tools/list, tools/call dispatch, the 10 handlers, instructions
+│   │   ├── mod.rs       # public tools surface: INSTRUCTIONS, list, call
+│   │   ├── descriptors.rs
+│   │   ├── dispatch.rs
+│   │   └── handlers/
+│   └── synth/           # transport-free typed cores (summarize_activity, check_health, describe_service, trace tree)
+│       ├── mod.rs       # public synth surface
+│       ├── activity.rs
+│       ├── health.rs
+│       ├── catalog.rs
+│       └── trace.rs
 └── api/
     ├── mod.rs
     ├── catalog.rs       # GET /api/v1/catalog — per-service metric/label catalog
