@@ -561,24 +561,8 @@ pub fn build_trace_tree(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::empty_test_state as state;
     use crate::store::log_store::LogEntry;
-    use crate::store::{AppState, LogStore, MetricStore, TraceStore};
-    use clap::Parser;
-    use parking_lot::RwLock;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicU64;
-    use std::time::Instant;
-
-    fn state() -> Arc<AppState> {
-        Arc::new(AppState {
-            log_store: RwLock::new(LogStore::new()),
-            metric_store: RwLock::new(MetricStore::new()),
-            trace_store: RwLock::new(TraceStore::new()),
-            config: crate::config::Config::parse_from(["aniani"]),
-            start_time: Instant::now(),
-            ingest_seq: AtomicU64::new(0),
-        })
-    }
 
     #[test]
     fn summarize_counts_errors_and_respects_since() {

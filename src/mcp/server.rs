@@ -235,20 +235,5 @@ mod tests {
         assert!(!is_allowed_origin("http://evil.com@localhost"));
     }
 
-    fn test_state() -> crate::store::SharedState {
-        use crate::store::{AppState, LogStore, MetricStore, TraceStore};
-        use clap::Parser;
-        use parking_lot::RwLock;
-        use std::sync::Arc;
-        use std::sync::atomic::AtomicU64;
-        use std::time::Instant;
-        Arc::new(AppState {
-            log_store: RwLock::new(LogStore::new()),
-            metric_store: RwLock::new(MetricStore::new()),
-            trace_store: RwLock::new(TraceStore::new()),
-            config: crate::config::Config::parse_from(["aniani"]),
-            start_time: Instant::now(),
-            ingest_seq: AtomicU64::new(0),
-        })
-    }
+    use crate::store::empty_test_state as test_state;
 }

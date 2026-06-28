@@ -418,7 +418,7 @@ fn format_range_series(sr: SeriesResult) -> Value {
     })
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     let ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

@@ -328,12 +328,13 @@ fn require_known_service(
 }
 
 fn handle_reset(state: &SharedState, id: Option<Value>, args: &Value) -> Value {
-    let scope = args.get("scope").and_then(|v| v.as_str());
-    match scope {
+    // Each arm clears its scope and returns the scope-specific structured fields.
+    let mut structured = match args.get("scope").and_then(|v| v.as_str()) {
         Some("all") => {
             state.log_store.write().clear();
             state.metric_store.write().clear();
             state.trace_store.write().clear();
+            json!({ "scope": "all" })
         }
         Some("service") => {
             let service = match args.get("service").and_then(|v| v.as_str()) {
@@ -343,15 +344,12 @@ fn handle_reset(state: &SharedState, id: Option<Value>, args: &Value) -> Value {
             state.log_store.write().clear_service(&service);
             state.metric_store.write().clear_service(&service);
             state.trace_store.write().clear_service(&service);
+            json!({ "scope": "service", "service": service })
         }
         _ => return tool_err(id, "scope must be 'all' or 'service'".into()),
-    }
+    };
     let checkpoint = state.ingest_seq.load(std::sync::atomic::Ordering::Relaxed);
-    let service = args.get("service").and_then(|v| v.as_str());
-    let mut structured = json!({ "scope": scope, "checkpoint": checkpoint });
-    if scope == Some("service") {
-        structured["service"] = json!(service);
-    }
+    structured["checkpoint"] = json!(checkpoint);
     tool_ok(
         id,
         structured,
@@ -555,9 +553,23 @@ fn handle_query_traces(state: &SharedState, id: Option<Value>, args: &Value) -> 
             conds.push(format!("resource.service.name = \"{}\"", escape_quoted(s)));
         }
         if let Some(status) = args.get("status").and_then(|v| v.as_str()) {
-            conds.push(format!("status = {status}"));
+            match status {
+                "error" | "ok" | "unset" => conds.push(format!("status = {status}")),
+                _ => {
+                    return tool_err(
+                        id,
+                        format!("invalid `status`: \"{status}\". Valid values: error, ok, unset"),
+                    );
+                }
+            }
         }
         if let Some(d) = args.get("min_duration").and_then(|v| v.as_str()) {
+            if crate::config::parse_duration(d).is_none() {
+                return tool_err(
+                    id,
+                    format!("invalid `min_duration`: \"{d}\". Example: 100ms, 1s, 500us"),
+                );
+            }
             conds.push(format!("duration > {d}"));
         }
         if let Some(n) = args.get("name").and_then(|v| v.as_str()) {
@@ -664,18 +676,7 @@ fn handle_query_metrics(state: &SharedState, id: Option<Value>, args: &Value) ->
         }
         evaluate_range(promql, &store, start_ms, end_ms, step_ms)
     } else {
-        let now_ms = {
-            let ns = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis();
-            if ns > i64::MAX as u128 {
-                i64::MAX
-            } else {
-                ns as i64
-            }
-        };
-        evaluate_instant(promql, &store, now_ms)
+        evaluate_instant(promql, &store, crate::query::promql::handlers::now_ms())
     };
     let result = match eval_result {
         Ok(r) => r,
@@ -771,22 +772,7 @@ mod tests {
         assert_eq!(logs["annotations"]["openWorldHint"], json!(false));
     }
 
-    fn tests_state() -> crate::store::SharedState {
-        use crate::store::{AppState, LogStore, MetricStore, TraceStore};
-        use clap::Parser;
-        use parking_lot::RwLock;
-        use std::sync::Arc;
-        use std::sync::atomic::AtomicU64;
-        use std::time::Instant;
-        Arc::new(AppState {
-            log_store: RwLock::new(LogStore::new()),
-            metric_store: RwLock::new(MetricStore::new()),
-            trace_store: RwLock::new(TraceStore::new()),
-            config: crate::config::Config::parse_from(["aniani"]),
-            start_time: Instant::now(),
-            ingest_seq: AtomicU64::new(0),
-        })
-    }
+    use crate::store::empty_test_state as tests_state;
 
     #[test]
     fn call_unknown_tool_is_invalid_params() {
@@ -1208,6 +1194,35 @@ mod tests {
         };
         traces.ingest_spans(vec![root]);
         tid
+    }
+
+    #[test]
+    fn query_traces_invalid_status_is_error() {
+        let st = tests_state();
+        let resp = call(
+            &st,
+            Some(json!(1)),
+            &json!({ "name": "query_traces", "arguments": { "service": "api", "status": "boom" } }),
+        );
+        assert_eq!(resp["result"]["isError"], json!(true));
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("status"), "should name the bad field: {text}");
+    }
+
+    #[test]
+    fn query_traces_invalid_min_duration_is_error() {
+        let st = tests_state();
+        let resp = call(
+            &st,
+            Some(json!(1)),
+            &json!({ "name": "query_traces", "arguments": { "service": "api", "min_duration": "soon" } }),
+        );
+        assert_eq!(resp["result"]["isError"], json!(true));
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("min_duration"),
+            "should name the bad field: {text}"
+        );
     }
 
     #[test]

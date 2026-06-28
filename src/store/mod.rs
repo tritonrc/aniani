@@ -217,6 +217,20 @@ pub fn max_ingest_seq(logs: &LogStore, metrics: &MetricStore, traces: &TraceStor
     l.max(m).max(t)
 }
 
+/// Build an empty `SharedState` with default config — for unit tests only.
+#[cfg(test)]
+pub(crate) fn empty_test_state() -> SharedState {
+    use clap::Parser;
+    Arc::new(AppState {
+        log_store: RwLock::new(LogStore::new()),
+        metric_store: RwLock::new(MetricStore::new()),
+        trace_store: RwLock::new(TraceStore::new()),
+        config: Config::parse_from(["aniani"]),
+        start_time: Instant::now(),
+        ingest_seq: AtomicU64::new(0),
+    })
+}
+
 /// Run eviction on all stores based on config.
 pub fn run_eviction(state: &AppState) {
     let retention = state.config.retention_duration();
