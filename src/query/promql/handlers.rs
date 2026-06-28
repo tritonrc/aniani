@@ -16,7 +16,7 @@ use crate::store::{LabelMatchOp, LabelMatcher};
 const PROMQL_HINT: &str = "Example: rate(http_requests_total[5m])";
 
 /// Maximum number of steps allowed in a range query. Matches Prometheus default of 11,000.
-const MAX_QUERY_STEPS: i64 = 11_000;
+pub(crate) const MAX_QUERY_STEPS: i64 = 11_000;
 
 #[derive(Debug, Deserialize)]
 pub struct InstantQueryParams {
