@@ -187,8 +187,7 @@ mod tests {
         let trace_store = TraceStore::new();
 
         save_snapshot(&log_store, &metric_store, &trace_store, dir.path()).unwrap();
-        let (restored_logs, restored_metrics, restored_traces) =
-            load_snapshot(dir.path()).unwrap();
+        let (restored_logs, restored_metrics, restored_traces) = load_snapshot(dir.path()).unwrap();
 
         let restored_entry = restored_logs
             .streams

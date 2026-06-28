@@ -113,7 +113,10 @@ async fn main() -> anyhow::Result<()> {
     let app = aniani::server::build_router(state.clone());
     let addr = format!("{}:{}", config.bind_address, config.port);
     let listener = TcpListener::bind(&addr).await?;
-    tracing::info!("aniani listening on {} (HTTP + OTLP/gRPC + MCP at /mcp)", addr);
+    tracing::info!(
+        "aniani listening on {} (HTTP + OTLP/gRPC + MCP at /mcp)",
+        addr
+    );
 
     // Graceful shutdown: wait for a termination signal, save snapshot, then exit.
     let shutdown_state = state.clone();

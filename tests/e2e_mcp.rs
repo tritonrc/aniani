@@ -29,7 +29,11 @@ async fn spawn() -> String {
 #[tokio::test]
 async fn get_mcp_returns_405() {
     let base = spawn().await;
-    let resp = reqwest::Client::new().get(format!("{base}/mcp")).send().await.unwrap();
+    let resp = reqwest::Client::new()
+        .get(format!("{base}/mcp"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 405);
 }
 
@@ -41,7 +45,9 @@ async fn initialize_handshake() {
         .json(&json!({"jsonrpc":"2.0","id":1,"method":"initialize",
                       "params":{"protocolVersion":"2025-11-25","capabilities":{},
                                 "clientInfo":{"name":"test","version":"0"}}}))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["result"]["protocolVersion"], "2025-11-25");

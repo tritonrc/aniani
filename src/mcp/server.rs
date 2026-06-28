@@ -122,7 +122,10 @@ fn is_allowed_origin(origin: &str) -> bool {
 /// Honor `MCP-Protocol-Version`: absent → proceed (default); present but
 /// unsupported → 400.
 fn check_protocol_version(headers: &HeaderMap) -> Result<(), Box<Response>> {
-    match headers.get("mcp-protocol-version").and_then(|v| v.to_str().ok()) {
+    match headers
+        .get("mcp-protocol-version")
+        .and_then(|v| v.to_str().ok())
+    {
         None => Ok(()),
         Some(v) if protocol::SUPPORTED_VERSIONS.contains(&v) => Ok(()),
         Some(_) => Err(Box::new(
@@ -140,7 +143,8 @@ mod tests {
     fn dispatch_ping_returns_empty_result() {
         let req = serde_json::from_value(json!({
             "jsonrpc":"2.0","id":1,"method":"ping","params":{}
-        })).unwrap();
+        }))
+        .unwrap();
         let resp = dispatch(&test_state(), req).expect("ping is a request");
         assert_eq!(resp["result"], json!({}));
     }
@@ -149,16 +153,21 @@ mod tests {
     fn dispatch_unknown_method_is_method_not_found() {
         let req = serde_json::from_value(json!({
             "jsonrpc":"2.0","id":1,"method":"nope","params":{}
-        })).unwrap();
+        }))
+        .unwrap();
         let resp = dispatch(&test_state(), req).expect("request");
-        assert_eq!(resp["error"]["code"], json!(crate::mcp::protocol::METHOD_NOT_FOUND));
+        assert_eq!(
+            resp["error"]["code"],
+            json!(crate::mcp::protocol::METHOD_NOT_FOUND)
+        );
     }
 
     #[test]
     fn dispatch_notification_returns_none() {
         let req = serde_json::from_value(json!({
             "jsonrpc":"2.0","method":"notifications/initialized"
-        })).unwrap();
+        }))
+        .unwrap();
         assert!(dispatch(&test_state(), req).is_none());
     }
 
@@ -209,7 +218,8 @@ mod tests {
     fn initialize_absent_version_falls_back_to_latest() {
         let req = serde_json::from_value(json!({
             "jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}
-        })).unwrap();
+        }))
+        .unwrap();
         let resp = dispatch(&test_state(), req).expect("request");
         assert_eq!(resp["result"]["protocolVersion"], json!("2025-11-25"));
     }
