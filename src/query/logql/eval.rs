@@ -453,14 +453,17 @@ mod tests {
                 LogEntry {
                     timestamp_ns: 1_000_000_000,
                     line: "connection timeout to bank API".into(),
+                    ingest_seq: 0,
                 },
                 LogEntry {
                     timestamp_ns: 2_000_000_000,
                     line: "retry 1/3 failed".into(),
+                    ingest_seq: 0,
                 },
                 LogEntry {
                     timestamp_ns: 3_000_000_000,
                     line: "healthcheck ok".into(),
+                    ingest_seq: 0,
                 },
             ],
         );
@@ -472,6 +475,7 @@ mod tests {
             vec![LogEntry {
                 timestamp_ns: 1_500_000_000,
                 line: "request received".into(),
+                ingest_seq: 0,
             }],
         );
         store

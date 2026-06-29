@@ -4,6 +4,7 @@ pub mod api;
 pub mod config;
 pub mod grpc;
 pub mod ingest;
+pub mod mcp;
 pub mod query;
 pub mod server;
 pub mod snapshot;

@@ -9,6 +9,7 @@ use axum::response::IntoResponse;
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::common::v1::any_value;
 use prost::Message;
+use std::sync::atomic::Ordering;
 
 use super::label::{extract_resource_labels, promote_service_name};
 use super::{decode_body, is_json_content_type, u64_to_i64_saturating};
@@ -84,7 +85,11 @@ pub fn ingest_logs(state: &AppState, request: ExportLogsServiceRequest) -> usize
                     u64_to_i64_saturating(log_record.time_unix_nano)
                 };
 
-                let entry = LogEntry { timestamp_ns, line };
+                let entry = LogEntry {
+                    timestamp_ns,
+                    line,
+                    ingest_seq: state.ingest_seq.fetch_add(1, Ordering::Relaxed),
+                };
 
                 prepared.push((labels, vec![entry]));
             }
@@ -145,5 +150,74 @@ fn any_value_to_string(val: &opentelemetry_proto::tonic::common::v1::AnyValue) -
             serde_json::to_string(&kvlist).unwrap_or_else(|_| "<kvlist>".to_string())
         }
         None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod ingest_seq_tests {
+    use super::*;
+    use crate::store::{AppState, LogStore, MetricStore, TraceStore};
+    use clap::Parser;
+    use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
+    use opentelemetry_proto::tonic::common::v1::{AnyValue, any_value};
+    use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
+    use parking_lot::RwLock;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Instant;
+
+    fn state() -> Arc<AppState> {
+        Arc::new(AppState {
+            log_store: RwLock::new(LogStore::new()),
+            metric_store: RwLock::new(MetricStore::new()),
+            trace_store: RwLock::new(TraceStore::new()),
+            config: crate::config::Config::parse_from(["aniani"]),
+            start_time: Instant::now(),
+            ingest_seq: AtomicU64::new(0),
+        })
+    }
+
+    fn one_log(msg: &str) -> ExportLogsServiceRequest {
+        ExportLogsServiceRequest {
+            resource_logs: vec![ResourceLogs {
+                resource: None,
+                scope_logs: vec![ScopeLogs {
+                    scope: None,
+                    schema_url: String::new(),
+                    log_records: vec![LogRecord {
+                        time_unix_nano: 1,
+                        observed_time_unix_nano: 0,
+                        severity_number: 9,
+                        severity_text: "INFO".into(),
+                        body: Some(AnyValue {
+                            value: Some(any_value::Value::StringValue(msg.into())),
+                        }),
+                        attributes: vec![],
+                        dropped_attributes_count: 0,
+                        flags: 0,
+                        trace_id: vec![],
+                        span_id: vec![],
+                        event_name: String::new(),
+                    }],
+                }],
+                schema_url: String::new(),
+            }],
+        }
+    }
+
+    #[test]
+    fn ingested_entries_carry_increasing_ingest_seq() {
+        let st = state();
+        ingest_logs(&st, one_log("a"));
+        ingest_logs(&st, one_log("b"));
+        assert_eq!(st.ingest_seq.load(Ordering::Relaxed), 2);
+        let store = st.log_store.read();
+        let mut seqs: Vec<u64> = store
+            .streams
+            .values()
+            .flat_map(|s| s.entries.iter().map(|e| e.ingest_seq))
+            .collect();
+        seqs.sort();
+        assert_eq!(seqs, vec![0, 1]);
     }
 }

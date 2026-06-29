@@ -293,6 +293,45 @@ Implementation: for each store, resolve the `Spur` for the `service` label name,
 
 ---
 
+## MCP Interface
+
+Aniani exposes a Model Context Protocol server at `POST /mcp` so coding agents can use it as a single-source observability instrument inside an iterative dev loop, rather than hand-writing REST calls. It is hand-rolled JSON-RPC 2.0 over MCP **Streamable HTTP** (no SDK), multiplexed onto the same listener as HTTP and OTLP/gRPC — same pattern as `grpc::routes`, merged in `server.rs` — so there is no separate port. The transport is stateless (no `Mcp-Session-Id`).
+
+**The loop it teaches** (returned verbatim in the `initialize` result's `instructions`):
+
+```
+1. reset(scope=all)            clean baseline before a run
+2. run your code/tests         telemetry export may lag a moment
+3. summarize_activity(service)  see what the run produced
+4. describe_service + query_*   drill into the details
+5. mark_checkpoint() → since    compare iterations without wiping
+```
+
+**Tool surface (10 tools, 1 write).** Intent-level, not a 1:1 REST mirror. Each tool carries annotations (`readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint`) and an `outputSchema`; results return both a concise text block and typed `structuredContent`.
+
+| Tool | Purpose |
+|---|---|
+| `reset` | **(only write)** clear all telemetry or one service; returns a fresh checkpoint token |
+| `mark_checkpoint` | return the current ingest-sequence token for later `since` scoping |
+| `summarize_activity` | per-service triage: error logs, failing/slow traces, error metrics, health score |
+| `check_health` | every service ranked worst-first |
+| `query_logs` | log lines via structured filters or a raw LogQL escape hatch |
+| `query_traces` | trace summaries via structured filters or a raw TraceQL escape hatch |
+| `query_metrics` | raw PromQL, instant or range (with `start`/`end`/`step`) |
+| `get_trace` | one trace as a parent/child span tree (`detail=detailed` adds attributes) |
+| `list_services` | services and which signals each reports |
+| `describe_service` | a service's queryable metric names, log label keys/values, span attribute keys |
+
+**Error model.** Protocol-level failures (malformed JSON-RPC, unknown method, unknown/missing tool name, schema-invalid arguments) are JSON-RPC error objects (`-32600`/`-32601`/`-32602`/...). Semantically-bad-but-schema-valid input (unknown service, malformed query string, an out-of-range range query) returns a `tools/call` result with `isError:true` and a self-correcting message — injected back into the model so it fixes itself. Unknown-service errors echo the bad value and list the known services.
+
+**Ingest-sequence cursor.** The stores index by **event time** (client-stamped), which is wrong for "what did my run just produce" — late-arriving or clock-skewed exports would be silently dropped by an event-time `since` filter. A global monotonic `ingest_seq: AtomicU64` on `AppState` is stamped onto every `LogEntry`, `Sample`, and `Span` at ingest. `mark_checkpoint`/`reset` return the current counter; `since` filters `ingest_seq >= token`, independent of event time. The counter is snapshotted and restored to `max(seen)+1` to preserve monotonicity. Eviction stays event-time based; the two are orthogonal.
+
+**Transport compliance highlights:** notifications → `202` empty body; top-level JSON arrays (batching) rejected with `-32600`; `GET`/`DELETE /mcp` → `405`; protocol-version negotiation via the `MCP-Protocol-Version` header (absent → proceed, unsupported → `400`); and `Origin` validation (non-localhost → `403`) as DNS-rebinding defense. Responses are always `application/json` (no SSE).
+
+**Architecture.** `src/mcp/` holds `mod.rs` (router), `protocol.rs` (JSON-RPC envelope + version constants), `server.rs` (POST dispatch + transport compliance), `tools.rs` (descriptors, `tools/list`, `tools/call` dispatch, handlers), and `synth.rs` (transport-free typed cores: `summarize_activity`, `check_health`, `describe_service`, `trace_item`, `build_trace_tree`). Handlers stay thin: parse args → call a core/evaluator → format the response.
+
+---
+
 ## Web UI
 
 An optional web UI is gated behind the `ui` Cargo feature, which is on by default; building with `--no-default-features` drops it for a smaller binary with no embedded assets. The UI's `index.html`, `app.js`, and `style.css` are embedded into the binary at compile time via `rust-embed`, so there is no JavaScript build step, and the page is served under `/ui` with its assets at `/ui/assets/{file}`. (In debug builds `rust-embed` reads these assets from disk at runtime, which conveniently allows live editing during development; `cargo build --release` bakes them into a fully self-contained binary.) It is a Vue 3 single-page app that loads Vue from a CDN through an import map, which means the first page load requires internet access. A reactive tab switch — no client-side router — toggles between four views: Overview (services and status), Logs (LogQL), Metrics (PromQL), and Traces (TraceQL), each calling the existing JSON query APIs. As with the rest of Aniani, there is no auth or TLS; the UI is intended for localhost-only use.

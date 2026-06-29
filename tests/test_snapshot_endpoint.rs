@@ -31,6 +31,7 @@ fn state_with_snapshot_dir(snapshot_dir: String) -> aniani::store::SharedState {
             restore: false,
         },
         start_time: Instant::now(),
+        ingest_seq: std::sync::atomic::AtomicU64::new(0),
     })
 }
 

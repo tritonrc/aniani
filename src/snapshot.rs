@@ -144,6 +144,7 @@ mod tests {
             vec![LogEntry {
                 timestamp_ns: 1000,
                 line: "hello".into(),
+                ingest_seq: 0,
             }],
         );
 
@@ -154,6 +155,7 @@ mod tests {
             vec![Sample {
                 timestamp_ms: 1000,
                 value: 0.5,
+                ingest_seq: 0,
             }],
         );
 
@@ -165,6 +167,40 @@ mod tests {
 
         assert_eq!(restored_logs.total_entries, 1);
         assert_eq!(restored_metrics.total_samples, 1);
+    }
+
+    #[test]
+    fn test_snapshot_preserves_ingest_seq() {
+        let dir = tempdir().unwrap();
+
+        let mut log_store = LogStore::new();
+        log_store.ingest_stream(
+            vec![("service".into(), "test".into())],
+            vec![LogEntry {
+                timestamp_ns: 1000,
+                line: "hello".into(),
+                ingest_seq: 99,
+            }],
+        );
+
+        let metric_store = MetricStore::new();
+        let trace_store = TraceStore::new();
+
+        save_snapshot(&log_store, &metric_store, &trace_store, dir.path()).unwrap();
+        let (restored_logs, restored_metrics, restored_traces) = load_snapshot(dir.path()).unwrap();
+
+        let restored_entry = restored_logs
+            .streams
+            .values()
+            .flat_map(|s| s.entries.iter())
+            .next()
+            .expect("restored log entry");
+        assert_eq!(restored_entry.ingest_seq, 99);
+
+        assert_eq!(
+            crate::store::max_ingest_seq(&restored_logs, &restored_metrics, &restored_traces),
+            99
+        );
     }
 
     #[cfg(unix)]

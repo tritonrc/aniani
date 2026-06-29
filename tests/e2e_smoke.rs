@@ -204,6 +204,7 @@ async fn test_e2e_smoke_all_features() {
             restore: false,
         },
         start_time: std::time::Instant::now(),
+        ingest_seq: std::sync::atomic::AtomicU64::new(0),
     });
 
     let app = aniani::server::build_router(state.clone());
@@ -2039,6 +2040,7 @@ async fn test_e2e_smoke_all_features() {
             restore: false,
         },
         start_time: std::time::Instant::now(),
+        ingest_seq: std::sync::atomic::AtomicU64::new(0),
     });
 
     let restored_app = aniani::server::build_router(restored_state);

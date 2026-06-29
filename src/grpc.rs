@@ -137,6 +137,7 @@ mod tests {
             trace_store: RwLock::new(TraceStore::new()),
             config: Config::parse_from(["aniani"]),
             start_time: Instant::now(),
+            ingest_seq: std::sync::atomic::AtomicU64::new(0),
         })
     }
 

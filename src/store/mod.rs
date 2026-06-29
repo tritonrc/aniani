@@ -8,6 +8,7 @@ pub mod posting_list;
 pub mod trace_store;
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 
 use lasso::{Rodeo, Spur};
@@ -28,6 +29,8 @@ pub struct AppState {
     pub trace_store: RwLock<TraceStore>,
     pub config: Config,
     pub start_time: Instant,
+    /// Monotonic counter stamped onto every ingested entry/sample/span.
+    pub ingest_seq: AtomicU64,
 }
 
 /// Type alias for the shared state handle.
@@ -189,6 +192,45 @@ fn all_ids_posting_list(ids: Vec<u64>) -> PostingList {
     PostingList::from_ids(ids)
 }
 
+/// Highest `ingest_seq` present across all three stores (0 if empty). Used to
+/// re-seed the global counter after restoring a snapshot so new ingests stay
+/// monotonic.
+pub fn max_ingest_seq(logs: &LogStore, metrics: &MetricStore, traces: &TraceStore) -> u64 {
+    let l = logs
+        .streams
+        .values()
+        .flat_map(|s| s.entries.iter().map(|e| e.ingest_seq))
+        .max()
+        .unwrap_or(0);
+    let m = metrics
+        .series
+        .values()
+        .flat_map(|s| s.samples.iter().map(|s| s.ingest_seq))
+        .max()
+        .unwrap_or(0);
+    let t = traces
+        .traces
+        .values()
+        .flat_map(|v| v.iter().map(|s| s.ingest_seq))
+        .max()
+        .unwrap_or(0);
+    l.max(m).max(t)
+}
+
+/// Build an empty `SharedState` with default config — for unit tests only.
+#[cfg(test)]
+pub(crate) fn empty_test_state() -> SharedState {
+    use clap::Parser;
+    Arc::new(AppState {
+        log_store: RwLock::new(LogStore::new()),
+        metric_store: RwLock::new(MetricStore::new()),
+        trace_store: RwLock::new(TraceStore::new()),
+        config: Config::parse_from(["aniani"]),
+        start_time: Instant::now(),
+        ingest_seq: AtomicU64::new(0),
+    })
+}
+
 /// Run eviction on all stores based on config.
 pub fn run_eviction(state: &AppState) {
     let retention = state.config.retention_duration();
@@ -233,5 +275,69 @@ fn duration_to_i64_ns(duration: std::time::Duration) -> i64 {
         i64::MAX
     } else {
         ns as i64
+    }
+}
+
+#[cfg(test)]
+mod ingest_seq_restore_tests {
+    use super::*;
+
+    #[test]
+    fn max_ingest_seq_finds_highest_across_stores() {
+        let mut logs = LogStore::new();
+        logs.ingest_stream(
+            vec![("service".into(), "a".into())],
+            vec![crate::store::log_store::LogEntry {
+                timestamp_ns: 1,
+                line: "x".into(),
+                ingest_seq: 41,
+            }],
+        );
+        let metrics = MetricStore::new();
+        let traces = TraceStore::new();
+        assert_eq!(max_ingest_seq(&logs, &metrics, &traces), 41);
+    }
+
+    #[test]
+    fn max_ingest_seq_finds_highest_on_metric_sample() {
+        let logs = LogStore::new();
+        let mut metrics = MetricStore::new();
+        metrics.ingest_samples(
+            "cpu",
+            vec![("host".into(), "a".into())],
+            vec![crate::store::metric_store::Sample {
+                timestamp_ms: 1,
+                value: 0.5,
+                ingest_seq: 57,
+            }],
+        );
+        let traces = TraceStore::new();
+        assert_eq!(max_ingest_seq(&logs, &metrics, &traces), 57);
+    }
+
+    #[test]
+    fn max_ingest_seq_finds_highest_on_span() {
+        use crate::store::trace_store::{Span, SpanKind, SpanStatus};
+
+        let logs = LogStore::new();
+        let metrics = MetricStore::new();
+        let mut traces = TraceStore::new();
+        let name = traces.interner.get_or_intern("span-a");
+        let service = traces.interner.get_or_intern("svc-a");
+        traces.ingest_spans(vec![Span {
+            trace_id: [1u8; 16],
+            span_id: [1u8; 8],
+            parent_span_id: None,
+            name,
+            service_name: service,
+            start_time_ns: 1000,
+            duration_ns: 100,
+            status: SpanStatus::Ok,
+            kind: SpanKind::Unspecified,
+            attributes: SmallVec::new(),
+            events: Vec::new(),
+            ingest_seq: 63,
+        }]);
+        assert_eq!(max_ingest_seq(&logs, &metrics, &traces), 63);
     }
 }

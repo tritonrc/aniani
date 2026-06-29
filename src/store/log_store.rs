@@ -16,6 +16,9 @@ use super::{LabelMatcher, LabelPairs};
 pub struct LogEntry {
     pub timestamp_ns: i64,
     pub line: String,
+    /// Global monotonic ingest sequence; assigned on store insert.
+    #[serde(default)]
+    pub ingest_seq: u64,
 }
 
 /// A log stream identified by a set of labels.
@@ -371,6 +374,7 @@ mod tests {
         LogEntry {
             timestamp_ns: ts,
             line: line.to_string(),
+            ingest_seq: 0,
         }
     }
 
@@ -637,6 +641,7 @@ mod tests {
             vec![LogEntry {
                 timestamp_ns: 100,
                 line: "a".into(),
+                ingest_seq: 0,
             }],
         );
         // Append internally unsorted batch — all > 100
@@ -646,10 +651,12 @@ mod tests {
                 LogEntry {
                     timestamp_ns: 300,
                     line: "c".into(),
+                    ingest_seq: 0,
                 },
                 LogEntry {
                     timestamp_ns: 200,
                     line: "b".into(),
+                    ingest_seq: 0,
                 },
             ],
         );

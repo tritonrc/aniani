@@ -78,7 +78,11 @@ pub fn build_router(state: SharedState) -> Router {
     // intentionally bypass the HTTP body-limit layer (tonic enforces its own
     // decode limit). Reassert a 404 fallback so unknown HTTP paths are not
     // captured by tonic's gRPC "Unimplemented" catch-all.
-    http.merge(crate::grpc::routes(state))
+    // MCP gets its own small JSON body limit (not the 64 MiB OTLP limit).
+    let mcp = crate::mcp::routes(state.clone()).layer(DefaultBodyLimit::max(1024 * 1024));
+
+    http.merge(mcp)
+        .merge(crate::grpc::routes(state))
         .fallback(handle_not_found)
 }
 

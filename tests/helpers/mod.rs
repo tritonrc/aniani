@@ -40,6 +40,7 @@ pub fn make_state() -> aniani::store::SharedState {
             restore: false,
         },
         start_time: Instant::now(),
+        ingest_seq: std::sync::atomic::AtomicU64::new(0),
     })
 }
 

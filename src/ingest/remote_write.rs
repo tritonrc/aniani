@@ -123,6 +123,9 @@ pub async fn remote_write_handler(
             .map(|s| Sample {
                 timestamp_ms: s.timestamp,
                 value: s.value,
+                ingest_seq: state
+                    .ingest_seq
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             })
             .collect();
 

@@ -579,6 +579,7 @@ async fn test_promql_topk_returns_top_k_series() {
                 vec![aniani::store::metric_store::Sample {
                     timestamp_ms: now_ms,
                     value: *val,
+                    ingest_seq: 0,
                 }],
             );
         }
@@ -635,6 +636,7 @@ async fn test_promql_bottomk_returns_bottom_k_series() {
                 vec![aniani::store::metric_store::Sample {
                     timestamp_ms: now_ms,
                     value: *val,
+                    ingest_seq: 0,
                 }],
             );
         }
@@ -689,6 +691,7 @@ async fn test_promql_topk_with_k_larger_than_series_count() {
             vec![aniani::store::metric_store::Sample {
                 timestamp_ms: now_ms,
                 value: 42.0,
+                ingest_seq: 0,
             }],
         );
     }

@@ -88,6 +88,9 @@ pub struct Span {
     pub kind: SpanKind,
     pub attributes: SmallVec<[(Spur, AttributeValue); 8]>,
     pub events: Vec<SpanEvent>,
+    /// Global monotonic ingest sequence; assigned on store insert.
+    #[serde(default)]
+    pub ingest_seq: u64,
 }
 
 /// Result of a trace search.
@@ -467,6 +470,7 @@ mod tests {
             kind: SpanKind::Unspecified,
             attributes: SmallVec::new(),
             events: Vec::new(),
+            ingest_seq: 0,
         }
     }
 
@@ -763,6 +767,7 @@ mod tests {
                 kind: SpanKind::Unspecified,
                 attributes: SmallVec::new(),
                 events: Vec::new(),
+                ingest_seq: 0,
             },
             Span {
                 trace_id,
@@ -776,6 +781,7 @@ mod tests {
                 kind: SpanKind::Unspecified,
                 attributes: SmallVec::new(),
                 events: Vec::new(),
+                ingest_seq: 0,
             },
         ]);
 
@@ -820,6 +826,7 @@ mod tests {
                 kind: SpanKind::Unspecified,
                 attributes: SmallVec::new(),
                 events: Vec::new(),
+                ingest_seq: 0,
             },
             Span {
                 trace_id,
@@ -833,6 +840,7 @@ mod tests {
                 kind: SpanKind::Unspecified,
                 attributes: SmallVec::new(),
                 events: Vec::new(),
+                ingest_seq: 0,
             },
         ]);
 

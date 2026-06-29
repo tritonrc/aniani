@@ -16,7 +16,7 @@ use crate::store::{LabelMatchOp, LabelMatcher};
 const PROMQL_HINT: &str = "Example: rate(http_requests_total[5m])";
 
 /// Maximum number of steps allowed in a range query. Matches Prometheus default of 11,000.
-const MAX_QUERY_STEPS: i64 = 11_000;
+pub(crate) const MAX_QUERY_STEPS: i64 = 11_000;
 
 #[derive(Debug, Deserialize)]
 pub struct InstantQueryParams {
@@ -418,7 +418,7 @@ fn format_range_series(sr: SeriesResult) -> Value {
     })
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     let ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -430,7 +430,7 @@ fn now_ms() -> i64 {
     }
 }
 
-fn parse_timestamp_ms(s: &str) -> Option<i64> {
+pub(crate) fn parse_timestamp_ms(s: &str) -> Option<i64> {
     // Try as integer first — classify by magnitude
     if let Ok(n) = s.parse::<i64>() {
         return Some(classify_to_ms(n));
