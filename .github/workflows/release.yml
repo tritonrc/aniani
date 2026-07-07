@@ -104,8 +104,8 @@ jobs:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           if [ -z "$TAP_TOKEN" ]; then
-            echo "HOMEBREW_TAP_TOKEN not set — skipping Homebrew formula bump."
-            exit 0
+            echo "::error::HOMEBREW_TAP_TOKEN is empty or unset — the Homebrew formula was NOT bumped for ${GITHUB_REF_NAME}. Set a valid PAT with write access to tritonrc/homebrew-tap, then re-run this job or bump the formula manually." >&2
+            exit 1
           fi
           version="${GITHUB_REF_NAME#v}"
           mac_sha=$(awk '{print $1}' artifacts/aniani-macos-arm64.tar.gz.sha256)
