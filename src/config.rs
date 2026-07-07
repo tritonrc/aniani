@@ -5,7 +5,11 @@ use std::time::Duration;
 
 /// Aniani: Lightweight ephemeral observability engine.
 #[derive(Parser, Debug, Clone)]
-#[command(name = "aniani", about = "Lightweight ephemeral observability engine")]
+#[command(
+    name = "aniani",
+    version,
+    about = "Lightweight ephemeral observability engine"
+)]
 pub struct Config {
     /// Bind address for the server.
     #[arg(long, default_value = "127.0.0.1")]
@@ -88,6 +92,13 @@ pub fn parse_duration(s: &str) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_flag_reports_package_version() {
+        let err = Config::try_parse_from(["aniani", "--version"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
+        assert!(err.to_string().contains(env!("CARGO_PKG_VERSION")));
+    }
 
     #[test]
     fn test_parse_duration() {
