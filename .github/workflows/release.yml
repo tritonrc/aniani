@@ -101,10 +101,10 @@ jobs:
 
       - name: Bump Homebrew formula
         env:
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
-          if [ -z "$TAP_TOKEN" ]; then
-            echo "::error::HOMEBREW_TAP_TOKEN is empty or unset — the Homebrew formula was NOT bumped for ${GITHUB_REF_NAME}. Set a valid PAT with write access to tritonrc/homebrew-tap, then re-run this job or bump the formula manually." >&2
+          if [ -z "$TAP_DEPLOY_KEY" ]; then
+            echo "::error::HOMEBREW_TAP_DEPLOY_KEY is empty or unset — the Homebrew formula was NOT bumped for ${GITHUB_REF_NAME}. Add a write deploy key on tritonrc/homebrew-tap and store its private key as the HOMEBREW_TAP_DEPLOY_KEY secret, or bump the formula manually." >&2
             exit 1
           fi
           version="${GITHUB_REF_NAME#v}"
@@ -114,8 +114,14 @@ jobs:
             echo "missing checksums; aborting formula bump" >&2
             exit 1
           fi
-          git clone --depth 1 \
-            "https://x-access-token:${TAP_TOKEN}@github.com/tritonrc/homebrew-tap.git" tap
+          # Authenticate to the tap over SSH with a repo-scoped deploy key
+          # (never expires; write access limited to tritonrc/homebrew-tap).
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$TAP_DEPLOY_KEY" > ~/.ssh/tap_deploy_key
+          chmod 600 ~/.ssh/tap_deploy_key
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_deploy_key -o IdentitiesOnly=yes"
+          git clone --depth 1 git@github.com:tritonrc/homebrew-tap.git tap
           # Patch version, release URLs, and the per-platform sha256 values in
           # place, preserving the formula's formatting. The macOS sha256 follows
           # the macos-arm64 URL; the Linux sha256 follows the linux-x86_64 URL.
