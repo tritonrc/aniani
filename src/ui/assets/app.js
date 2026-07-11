@@ -1616,10 +1616,10 @@ const App = {
                 v-for="p in rangePresets"
                 :key="p"
                 class="range-btn"
-                :class="{ active: !customWindow.active && timeRange.preset === p }"
+                :class="{ active: (route.tab !== 'logs' || !customWindow.active) && timeRange.preset === p }"
                 @click="pickRange(p)"
               >{{ p }}</button>
-              <button v-if="customWindow.active" class="range-btn active" disabled>custom</button>
+              <button v-if="route.tab === 'logs' && customWindow.active" class="range-btn active" disabled>custom</button>
             </span>
             <span class="range-group">
               <button
