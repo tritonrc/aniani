@@ -12,7 +12,7 @@ use prost::Message;
 use rustc_hash::FxHashMap;
 use std::sync::atomic::Ordering;
 
-use super::label::{extract_resource_labels, promote_service_name};
+use super::label::{extract_key_values, extract_resource_labels, promote_service_name};
 use super::{decode_body, is_json_content_type, u64_to_i64_saturating};
 use crate::store::log_store::LogEntry;
 use crate::store::{AppState, SharedState};
@@ -77,6 +77,16 @@ pub fn ingest_logs(state: &AppState, request: ExportLogsServiceRequest) -> usize
                 // Map severity number to a "level" label.
                 let level = severity_to_level(log_record.severity_number);
                 labels.push(("level".to_string(), level.to_string()));
+
+                // Promote log record attributes to labels, mirroring the
+                // metrics path, so they are queryable via LogQL label matchers
+                // (and visible to describe_service). Skip keys that collide
+                // with an already-set label (e.g. service/level/resource attrs).
+                for (k, v) in extract_key_values(&log_record.attributes) {
+                    if !labels.iter().any(|(ek, _)| *ek == k) {
+                        labels.push((k, v));
+                    }
+                }
 
                 // Extract the log line from the body field.
                 let line = match &log_record.body {
@@ -230,5 +240,53 @@ mod ingest_seq_tests {
             .collect();
         seqs.sort();
         assert_eq!(seqs, vec![0, 1]);
+    }
+
+    #[test]
+    fn log_record_attributes_become_queryable_labels() {
+        use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
+        let st = state();
+        let mut req = one_log("boom");
+        req.resource_logs[0].scope_logs[0].log_records[0].attributes = vec![
+            KeyValue {
+                key: "http.method".into(),
+                value: Some(AnyValue {
+                    value: Some(any_value::Value::StringValue("POST".into())),
+                }),
+            },
+            // Collision with the severity-derived "level" label: must be ignored.
+            KeyValue {
+                key: "level".into(),
+                value: Some(AnyValue {
+                    value: Some(any_value::Value::StringValue("debug".into())),
+                }),
+            },
+        ];
+        ingest_logs(&st, req);
+
+        let store = st.log_store.read();
+        // The stream labels should now include http.method=POST (queryable via
+        // LogQL label matchers) but keep level=info from the severity mapping.
+        let labels: Vec<(String, String)> = store
+            .streams
+            .values()
+            .next()
+            .unwrap()
+            .labels
+            .iter()
+            .map(|(k, v)| {
+                (
+                    store.interner.resolve(k).to_string(),
+                    store.interner.resolve(v).to_string(),
+                )
+            })
+            .collect();
+        assert!(
+            labels
+                .iter()
+                .any(|(k, v)| k == "http.method" && v == "POST")
+        );
+        assert!(labels.iter().any(|(k, v)| k == "level" && v == "info"));
+        assert!(!labels.iter().any(|(k, v)| k == "level" && v == "debug"));
     }
 }
