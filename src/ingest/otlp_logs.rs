@@ -9,6 +9,7 @@ use axum::response::IntoResponse;
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::common::v1::any_value;
 use prost::Message;
+use rustc_hash::FxHashMap;
 use std::sync::atomic::Ordering;
 
 use super::label::{extract_resource_labels, promote_service_name};
@@ -57,9 +58,13 @@ pub async fn logs_handler(
 /// Transport-agnostic: shared by the OTLP/HTTP handler and the OTLP/gRPC
 /// service. Returns the number of log entries ingested.
 pub fn ingest_logs(state: &AppState, request: ExportLogsServiceRequest) -> usize {
-    // Prepare all ingestion data outside the write lock.
+    // Prepare all ingestion data outside the write lock. Group records that
+    // share an identical label set so each stream receives one batched
+    // `ingest_stream` call rather than N single-entry calls (which would make
+    // the per-append sort check quadratic for a busy stream).
     type LogBatch = (Vec<(String, String)>, Vec<LogEntry>);
-    let mut prepared: Vec<LogBatch> = Vec::new();
+    let mut grouped: Vec<LogBatch> = Vec::new();
+    let mut key_index: FxHashMap<Vec<(String, String)>, usize> = FxHashMap::default();
 
     for resource_logs in &request.resource_logs {
         let mut resource_labels = extract_resource_labels(&resource_logs.resource);
@@ -91,15 +96,21 @@ pub fn ingest_logs(state: &AppState, request: ExportLogsServiceRequest) -> usize
                     ingest_seq: state.ingest_seq.fetch_add(1, Ordering::Relaxed),
                 };
 
-                prepared.push((labels, vec![entry]));
+                match key_index.get(&labels).copied() {
+                    Some(idx) => grouped[idx].1.push(entry),
+                    None => {
+                        key_index.insert(labels.clone(), grouped.len());
+                        grouped.push((labels, vec![entry]));
+                    }
+                }
             }
         }
     }
 
     // Acquire write lock and ingest.
-    let entry_count = prepared.len();
+    let entry_count: usize = grouped.iter().map(|(_, e)| e.len()).sum();
     let mut store = state.log_store.write();
-    for (labels, entries) in prepared {
+    for (labels, entries) in grouped {
         store.ingest_stream(labels, entries);
     }
 

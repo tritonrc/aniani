@@ -278,6 +278,68 @@ fn duration_to_i64_ns(duration: std::time::Duration) -> i64 {
     }
 }
 
+/// After appending a new batch to an already-sorted vec, decide whether the
+/// whole vec needs re-sorting. `prev_len` is the length before the batch was
+/// appended. Only the batch and its boundary with the old tail are inspected,
+/// so this is O(batch) rather than O(total), avoiding quadratic behavior when
+/// many small batches append to the same stream/series.
+pub(crate) fn batch_needs_sort<T, F>(items: &[T], prev_len: usize, key: F) -> bool
+where
+    F: Fn(&T) -> i64,
+{
+    // No new batch appended.
+    if prev_len >= items.len() {
+        return false;
+    }
+    if prev_len > 0 && key(&items[prev_len - 1]) > key(&items[prev_len]) {
+        return true;
+    }
+    items[prev_len..]
+        .windows(2)
+        .any(|w| key(&w[0]) > key(&w[1]))
+}
+
+#[cfg(test)]
+mod batch_needs_sort_tests {
+    use super::*;
+
+    #[test]
+    fn empty_batch_needs_no_sort() {
+        let v: Vec<i64> = vec![1, 2, 3];
+        assert!(!batch_needs_sort(&v, 3, |x| *x));
+    }
+
+    #[test]
+    fn sorted_batch_appended_to_sorted_keeps_order() {
+        let v = vec![1, 2, 5, 6]; // prev_len=2, batch [5,6]
+        assert!(!batch_needs_sort(&v, 2, |x| *x));
+    }
+
+    #[test]
+    fn boundary_violation_needs_sort() {
+        let v = vec![1, 2, 0]; // prev_len=2, 2 > 0 at boundary
+        assert!(batch_needs_sort(&v, 2, |x| *x));
+    }
+
+    #[test]
+    fn internally_unsorted_batch_needs_sort() {
+        let v = vec![1, 2, 6, 5]; // prev_len=2, boundary ok, batch [6,5] unsorted
+        assert!(batch_needs_sort(&v, 2, |x| *x));
+    }
+
+    #[test]
+    fn first_batch_unsorted_needs_sort() {
+        let v = vec![3, 1, 2]; // prev_len=0
+        assert!(batch_needs_sort(&v, 0, |x| *x));
+    }
+
+    #[test]
+    fn single_element_first_batch_needs_no_sort() {
+        let v = vec![5]; // prev_len=0
+        assert!(!batch_needs_sort(&v, 0, |x| *x));
+    }
+}
+
 #[cfg(test)]
 mod ingest_seq_restore_tests {
     use super::*;

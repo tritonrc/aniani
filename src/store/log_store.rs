@@ -114,24 +114,20 @@ impl LogStore {
             return;
         };
         let entry_count = entries.len();
-
-        let was_empty = stream.entries.is_empty();
-        for entry in entries {
-            stream.entries.push(entry);
-        }
+        let prev_len = stream.entries.len();
+        stream.entries.extend(entries);
         self.total_entries += entry_count;
 
-        // Maintain sorted order for partition_point correctness.
-        // Always check the full vec after appending — an internally unsorted batch
-        // where all timestamps are >= prev_last_ts would otherwise be missed.
-        if entry_count > 1 || !was_empty {
-            let needs_sort = !stream
-                .entries
-                .windows(2)
-                .all(|w| w[0].timestamp_ns <= w[1].timestamp_ns);
-            if needs_sort {
-                stream.entries.sort_by_key(|e| e.timestamp_ns);
-            }
+        // Maintain sorted order for partition_point correctness. The existing
+        // entries (0..prev_len) are already sorted, so we only check the newly
+        // appended batch for internal order plus the single boundary between
+        // the old tail and the batch head. This is O(batch) rather than
+        // re-scanning the whole vec, avoiding quadratic behavior when many
+        // small batches append to the same stream.
+        let needs_sort = entry_count > 0
+            && super::batch_needs_sort(&stream.entries, prev_len, |e| e.timestamp_ns);
+        if needs_sort {
+            stream.entries.sort_by_key(|e| e.timestamp_ns);
         }
     }
 

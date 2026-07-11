@@ -187,22 +187,16 @@ impl MetricStore {
             return;
         };
         let sample_count = samples.len();
-
-        let was_empty = series.samples.is_empty();
-        for sample in samples {
-            series.samples.push(sample);
-        }
+        let prev_len = series.samples.len();
+        series.samples.extend(samples);
         self.total_samples += sample_count;
 
-        // Maintain sorted order for partition_point correctness.
-        if sample_count > 1 || !was_empty {
-            let needs_sort = !series
-                .samples
-                .windows(2)
-                .all(|w| w[0].timestamp_ms <= w[1].timestamp_ms);
-            if needs_sort {
-                series.samples.sort_by_key(|s| s.timestamp_ms);
-            }
+        // Maintain sorted order for partition_point correctness. Only inspect
+        // the new batch and its boundary — O(batch), not O(total).
+        let needs_sort = sample_count > 0
+            && super::batch_needs_sort(&series.samples, prev_len, |s| s.timestamp_ms);
+        if needs_sort {
+            series.samples.sort_by_key(|s| s.timestamp_ms);
         }
     }
 
