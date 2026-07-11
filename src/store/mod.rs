@@ -114,13 +114,21 @@ where
     }
 
     let mut positive_lists: Vec<PostingList> = Vec::new();
+    // Full ID set, computed at most once per query and reused by every
+    // negative matcher instead of re-collecting all stream/series IDs each.
+    let mut all_posting: Option<PostingList> = None;
+    let all_or_init = |all_posting: &mut Option<PostingList>| -> PostingList {
+        all_posting
+            .get_or_insert_with(|| all_ids_posting_list(all_ids()))
+            .clone()
+    };
 
     for matcher in matchers {
         let name_spur = match interner.get(&matcher.name) {
             Some(s) => s,
             None => match matcher.op {
                 LabelMatchOp::Neq | LabelMatchOp::NotRegex => {
-                    positive_lists.push(all_ids_posting_list(all_ids()));
+                    positive_lists.push(all_or_init(&mut all_posting));
                     continue;
                 }
                 _ => return Vec::new(),
@@ -140,7 +148,7 @@ where
             }
             LabelMatchOp::Neq => {
                 let value_spur = interner.get(&matcher.value);
-                let all = all_ids_posting_list(all_ids());
+                let all = all_or_init(&mut all_posting);
                 let result = value_spur
                     .and_then(|vs| label_index.get(&(name_spur, vs)))
                     .map(|exclude| difference(&all, exclude))
@@ -168,7 +176,7 @@ where
                 let Some(re) = compiled_label_regex(&matcher.value) else {
                     return Vec::new();
                 };
-                let all = all_ids_posting_list(all_ids());
+                let all = all_or_init(&mut all_posting);
                 let mut excluded = PostingList::new();
                 if let Some(values) = label_values.get(&name_spur) {
                     for &vs in values {
