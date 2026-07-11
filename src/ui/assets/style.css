@@ -83,9 +83,43 @@ header h1 { margin: 16px 0 8px; font-size: 20px; }
 .results tr.clickable { cursor: pointer; }
 .results tr.clickable:hover td { background: var(--panel); }
 
-.services { list-style: none; padding: 0; }
-.services li { padding: 6px 0; border-bottom: 1px solid var(--border); }
-.services .signals { color: var(--muted); margin-left: 12px; }
+.tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+.tile {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px 12px;
+}
+.tile-label { color: var(--muted); font-size: 12px; }
+.tile-value { font-size: 20px; font-weight: 600; margin-top: 4px; }
+
+.health-list { display: flex; flex-direction: column; }
+.health-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.health-name { flex: 0 0 auto; min-width: 160px; }
+.health-bar {
+  flex: 1;
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.health-fill { display: block; height: 100%; border-radius: 4px; }
+.health-fill.h-ok { background: var(--ok); }
+.health-fill.h-warn { background: #fed330; }
+.health-fill.h-bad { background: var(--error); }
+.health-score { flex: 0 0 auto; width: 28px; text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.health-issue { flex: 1 1 auto; font-size: 12px; }
+
 .signal-links { margin-left: 12px; display: inline-flex; gap: 10px; }
 .signal-links a, .pivot-links a, .pivot-link {
   color: var(--accent);

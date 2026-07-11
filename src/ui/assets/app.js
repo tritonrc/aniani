@@ -47,6 +47,21 @@ function agoLabel(startNs) {
   return Math.round(s / 3600) + 'h ago'
 }
 
+// Human byte size: '512 B', '63.1 KB', '1.2 MB'.
+function formatBytes(n) {
+  if (n < 1024) return n + ' B'
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
+  return (n / (1024 * 1024)).toFixed(1) + ' MB'
+}
+
+// Human uptime from a seconds count: '42s', '12m 3s', '2h 13m'.
+function formatUptime(sec) {
+  const s = Math.floor(sec)
+  if (s < 60) return s + 's'
+  if (s < 3600) return Math.floor(s / 60) + 'm ' + (s % 60) + 's'
+  return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm'
+}
+
 // --- hash-router helpers ---------------------------------------------------
 
 // '#/logs?q=%7B...%7D' -> { tab: 'logs', params: { q: '{...}' } }
@@ -531,43 +546,91 @@ const Landing = {
   template: `
     <section class="view">
       <h2>Overview</h2>
-      <p v-if="error" class="error">{{ error }}</p>
-      <h3>Services</h3>
-      <ul class="services" v-if="services.length">
-        <li v-for="s in services" :key="s.name">
-          <strong>{{ s.name }}</strong>
-          <span class="signals">{{ (s.signals || []).join(', ') }}</span>
-          <span class="signal-links">
-            <a v-for="l in signalLinks(s.name)" :key="l.label" :href="l.href">{{ l.label }}</a>
-          </span>
-        </li>
-      </ul>
-      <p v-else-if="!error" class="muted">No services have reported telemetry yet.</p>
       <h3>Status</h3>
-      <pre class="json" v-if="status">{{ pretty(status) }}</pre>
+      <p v-if="statusError" class="error">{{ statusError }}</p>
+      <div class="tile-grid" v-if="tiles.length">
+        <div class="tile" v-for="t in tiles" :key="t.label">
+          <div class="tile-label">{{ t.label }}</div>
+          <div class="tile-value">{{ t.value }}</div>
+        </div>
+      </div>
+      <h3>Health</h3>
+      <p v-if="healthError" class="error">{{ healthError }}</p>
+      <div class="health-list" v-if="sortedHealth.length">
+        <div class="health-row" v-for="h in sortedHealth" :key="h.service">
+          <span class="health-name">
+            <strong>{{ h.service }}</strong>
+            <span class="signal-links">
+              <a v-for="l in signalLinks(h.service)" :key="l.label" :href="l.href">{{ l.label }}</a>
+            </span>
+          </span>
+          <span class="health-bar"><span class="health-fill" :class="barClass(h.health_score)" :style="{ width: h.health_score + '%' }"></span></span>
+          <span class="health-score">{{ Math.round(h.health_score) }}</span>
+          <span class="health-issue muted" v-if="h.top_issue !== 'No issues detected'">{{ h.top_issue }}</span>
+        </div>
+      </div>
+      <p v-else-if="!healthError" class="muted">No services have reported telemetry yet.</p>
     </section>
   `,
   data() {
-    return { services: [], status: null, error: '' }
+    return { statusData: null, health: [], statusError: '', healthError: '', loadedOnce: false }
+  },
+  computed: {
+    tiles() {
+      if (!this.statusData) return []
+      const d = this.statusData
+      return [
+        { label: 'Services', value: String(d.serviceCount) },
+        { label: 'Traces / Spans', value: d.totalTraces + ' / ' + d.totalSpans },
+        { label: 'Series / Samples', value: d.totalMetricSeries + ' / ' + d.totalMetricSamples },
+        { label: 'Log lines', value: String(d.totalLogEntries) },
+        { label: 'Memory', value: formatBytes(d.memoryBytes) },
+        { label: 'Uptime', value: formatUptime(d.uptimeSeconds) },
+      ]
+    },
+    sortedHealth() {
+      return [...this.health].sort((a, b) => a.health_score - b.health_score)
+    },
   },
   methods: {
-    pretty(v) {
-      return JSON.stringify(v, null, 2)
-    },
     signalLinks,
+    barClass(score) {
+      if (score >= 90) return 'h-ok'
+      if (score >= 70) return 'h-warn'
+      return 'h-bad'
+    },
+    async load() {
+      // Independent failures so one section's error doesn't blank the other.
+      const [st, dg] = await Promise.allSettled([
+        apiGet('/api/v1/status'),
+        apiGet('/api/v1/diagnose'),
+      ])
+      loadVocab() // refresh shared service vocab so signal links include newly-seen services
+      if (st.status === 'fulfilled') {
+        this.statusData = st.value.data
+        this.statusError = ''
+      } else {
+        this.statusError = st.reason.message
+      }
+      if (dg.status === 'fulfilled') {
+        this.health = dg.value.services || []
+        this.healthError = ''
+      } else {
+        this.healthError = dg.reason.message
+      }
+    },
   },
-  async mounted() {
-    // Load services and status independently so one failing doesn't blank the other.
-    const [svc, st] = await Promise.allSettled([
-      apiGet('/api/v1/services'),
-      apiGet('/api/v1/status'),
-    ])
-    if (svc.status === 'fulfilled') {
-      this.services = (svc.value.data && svc.value.data.services) || []
-    } else {
-      this.error = svc.reason.message
+  mounted() {
+    this.load()
+  },
+  activated() {
+    // <keep-alive> fires activated() right after mounted() on first insertion;
+    // skip that one so the initial load isn't fetched twice.
+    if (!this.loadedOnce) {
+      this.loadedOnce = true
+      return
     }
-    if (st.status === 'fulfilled') this.status = st.value
+    this.load()
   },
 }
 
