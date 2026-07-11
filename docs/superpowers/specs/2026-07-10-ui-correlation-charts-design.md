@@ -113,7 +113,10 @@ New `LineChart` Vue component (~150 lines, inline SVG, no deps):
 
 **a. `LogEntry.trace_id`.**
 `#[serde(default)] pub trace_id: Option<String>` (lowercase hex) on
-`store/log_store.rs::LogEntry` — `serde(default)` keeps old snapshots loading.
+`store/log_store.rs::LogEntry`. Note: bincode is positional, so `serde(default)`
+does NOT make pre-change snapshot files loadable — any field addition breaks old
+snapshots, a pre-existing property of the bincode approach that is acceptable
+for an ephemeral store (the default applies for self-describing formats only).
 `ingest/otlp_logs.rs` populates it from the OTLP log record when non-empty.
 Loki push ingest leaves it `None`. The LogQL eval path threads it through, and
 `query/logql/handlers.rs` emits it Loki-structured-metadata style:
