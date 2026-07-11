@@ -415,6 +415,7 @@ const TraceView = {
     },
     href,
     signalLinks,
+    sigEmoji,
     // href('logs', ...) for the span's service, windowed 30s before/after the
     // span so the correlated log lines are in view without an extra search.
     // startBig/endBig are BigInt; do the arithmetic in BigInt then String() it.
@@ -483,11 +484,7 @@ const TraceView = {
                         :href="l.href"
                         :title="'View ' + l.label + ' for ' + row.span.service"
                         :aria-label="'View ' + l.label + ' for ' + row.span.service"
-                      >
-                        <svg v-if="l.label === 'logs'" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 4h10M3 8h10M3 12h7"/></svg>
-                        <svg v-else-if="l.label === 'metrics'" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polyline points="2 12 6 7 9 10 14 4"/></svg>
-                        <svg v-else viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 4h6M6 8h6M10 12h4"/></svg>
-                      </a>
+                      >{{ sigEmoji(l.label) }}</a>
                     </span>
                   </span>
                 </div>
@@ -581,6 +578,14 @@ function signalLinks(service) {
     links.push({ label: 'traces', href: href('traces', { q: '{ resource.service.name = "' + escLabel(service) + '" }' }) })
   }
   return links
+}
+
+// Emoji glyph for a signalLinks() entry, used as a compact icon in the
+// TraceView span detail (see the tl-svc-cell / sig-icons markup above).
+function sigEmoji(label) {
+  if (label === 'logs') return '📄'
+  if (label === 'metrics') return '📈'
+  return '🔍'
 }
 
 const Landing = {
