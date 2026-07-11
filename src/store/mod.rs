@@ -8,11 +8,14 @@ pub mod posting_list;
 pub mod trace_store;
 
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 
 use lasso::{Rodeo, Spur};
+use parking_lot::Mutex;
 use parking_lot::RwLock;
+use regex::Regex;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
@@ -145,9 +148,8 @@ where
                 positive_lists.push(result);
             }
             LabelMatchOp::Regex => {
-                let re = match regex::Regex::new(&format!("^(?:{})$", matcher.value)) {
-                    Ok(r) => r,
-                    Err(_) => return Vec::new(),
+                let Some(re) = compiled_label_regex(&matcher.value) else {
+                    return Vec::new();
                 };
                 let mut result = PostingList::new();
                 if let Some(values) = label_values.get(&name_spur) {
@@ -163,9 +165,8 @@ where
                 positive_lists.push(result);
             }
             LabelMatchOp::NotRegex => {
-                let re = match regex::Regex::new(&format!("^(?:{})$", matcher.value)) {
-                    Ok(r) => r,
-                    Err(_) => return Vec::new(),
+                let Some(re) = compiled_label_regex(&matcher.value) else {
+                    return Vec::new();
                 };
                 let all = all_ids_posting_list(all_ids());
                 let mut excluded = PostingList::new();
@@ -190,6 +191,24 @@ where
 
 fn all_ids_posting_list(ids: Vec<u64>) -> PostingList {
     PostingList::from_ids(ids)
+}
+
+/// Process-wide cache of anchored label-matcher regexes. Repeated queries with
+/// the same pattern (common in the agent dev loop) reuse the compiled `Regex`
+/// instead of recompiling on every call to `select_indexed_ids`. `Regex`
+/// clones cheaply (internally `Arc`-backed). The cache is unbounded but, for an
+/// ephemeral per-worktree instance, the set of distinct patterns is small.
+static REGEX_CACHE: OnceLock<Mutex<FxHashMap<String, Regex>>> = OnceLock::new();
+
+fn compiled_label_regex(pattern: &str) -> Option<Regex> {
+    let cache = REGEX_CACHE.get_or_init(|| Mutex::new(FxHashMap::default()));
+    if let Some(re) = cache.lock().get(pattern) {
+        return Some(re.clone());
+    }
+    let anchored = format!("^(?:{})$", pattern);
+    let re = Regex::new(&anchored).ok()?;
+    cache.lock().insert(pattern.to_string(), re.clone());
+    Some(re)
 }
 
 /// Highest `ingest_seq` present across all three stores (0 if empty). Used to
