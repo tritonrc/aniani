@@ -135,10 +135,17 @@ pub fn ingest_logs(state: &AppState, request: ExportLogsServiceRequest) -> usize
 /// bytes but treats them as semantically "no trace" (the same convention the
 /// trace ingestion path uses for absent parent span ids).
 fn trace_id_hex(trace_id: &[u8]) -> Option<String> {
+    use std::fmt::Write;
+
     if trace_id.is_empty() || trace_id.iter().all(|&b| b == 0) {
         return None;
     }
-    Some(trace_id.iter().map(|b| format!("{b:02x}")).collect())
+    let mut hex = String::with_capacity(trace_id.len() * 2);
+    for b in trace_id {
+        // Writing to a String is infallible; there's nothing to propagate.
+        let _ = write!(hex, "{b:02x}");
+    }
+    Some(hex)
 }
 
 fn current_time_ns() -> i64 {
