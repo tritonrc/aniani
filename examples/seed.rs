@@ -11,9 +11,11 @@
 //! Stripe call records an exception event — exactly the shape the Jaeger-style
 //! trace view is built to drill into.
 
+use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
+use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
 use opentelemetry_proto::tonic::metrics::v1::{
     Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics, metric, number_data_point,
 };
@@ -575,6 +577,45 @@ fn big_dashboard_trace(
     ExportTraceServiceRequest { resource_spans }
 }
 
+/// A single OTLP error log record tied to a trace by id, for exercising the
+/// log-to-trace correlation pivot (the Loki push path below has no trace_id).
+fn error_log_request(
+    service: &str,
+    trace_id: &[u8; 16],
+    body: &str,
+    ts_ns: u64,
+) -> ExportLogsServiceRequest {
+    ExportLogsServiceRequest {
+        resource_logs: vec![ResourceLogs {
+            resource: Some(Resource {
+                attributes: vec![kv("service.name", service)],
+                dropped_attributes_count: 0,
+                entity_refs: vec![],
+            }),
+            scope_logs: vec![ScopeLogs {
+                scope: None,
+                log_records: vec![LogRecord {
+                    time_unix_nano: ts_ns,
+                    observed_time_unix_nano: 0,
+                    severity_number: 17, // ERROR
+                    severity_text: "ERROR".into(),
+                    body: Some(AnyValue {
+                        value: Some(any_value::Value::StringValue(body.into())),
+                    }),
+                    attributes: vec![],
+                    dropped_attributes_count: 0,
+                    flags: 0,
+                    trace_id: trace_id.to_vec(),
+                    span_id: vec![],
+                    event_name: String::new(),
+                }],
+                schema_url: String::new(),
+            }],
+            schema_url: String::new(),
+        }],
+    }
+}
+
 async fn post_proto(client: &reqwest::Client, url: &str, body: Vec<u8>) -> anyhow::Result<()> {
     let resp = client
         .post(url)
@@ -724,6 +765,24 @@ async fn main() -> anyhow::Result<()> {
     if !resp.status().is_success() {
         anyhow::bail!("loki push -> {}", resp.status());
     }
+
+    // One OTLP log record carrying the failing checkout trace's id, so the
+    // log <-> trace correlation pivot has something to demonstrate. The
+    // failing trace ([0x33; 16]) starts at `now - 90_000 * ms`; its
+    // stripe.charge span runs from +340ms to +870ms, so +400ms lands inside it.
+    let failing_trace_base_ns = now - 90_000 * ms;
+    let error_log = error_log_request(
+        "payments",
+        &[0x33; 16],
+        "charge failed for order 778: stripe timeout",
+        failing_trace_base_ns + 400 * ms,
+    );
+    post_proto(
+        &client,
+        &format!("{}/v1/logs", base),
+        error_log.encode_to_vec(),
+    )
+    .await?;
 
     println!(
         "\nSeeded {} traces ({} spans), {} metrics, logs across 3 services.",
