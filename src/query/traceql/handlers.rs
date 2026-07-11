@@ -313,12 +313,15 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 fn parse_trace_id(s: &str) -> Option<[u8; 16]> {
     let s = s.trim();
-    if s.len() != 32 {
+    // Operate on bytes to avoid panicking on multi-byte UTF-8 that crosses
+    // an even byte boundary (str slicing requires char boundaries).
+    let b = s.as_bytes();
+    if b.len() != 32 {
         return None;
     }
     let mut bytes = [0u8; 16];
     for i in 0..16 {
-        bytes[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
+        bytes[i] = u8::from_str_radix(std::str::from_utf8(&b[i * 2..i * 2 + 2]).ok()?, 16).ok()?;
     }
     Some(bytes)
 }
@@ -359,5 +362,23 @@ mod tests {
             ),
             MAX_TRACE_SEARCH_LIMIT
         );
+    }
+
+    #[test]
+    fn test_parse_trace_id_rejects_multibyte_utf8_without_panicking() {
+        // 32-byte string where a multi-byte char crosses an even byte
+        // boundary — previously panicked on str slicing.
+        let crafted: String = "a".to_string() + &"à".repeat(15) + "a";
+        assert_eq!(crafted.len(), 32);
+        let result = std::panic::catch_unwind(|| parse_trace_id(&crafted));
+        assert!(result.is_ok(), "parse_trace_id must not panic");
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn test_parse_trace_id_accepts_valid_hex() {
+        let id = parse_trace_id("00112233445566778899aabbccddeeff").unwrap();
+        assert_eq!(id[0], 0x00);
+        assert_eq!(id[15], 0xff);
     }
 }
