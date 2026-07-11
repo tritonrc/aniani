@@ -66,6 +66,24 @@ fn classify_parse_failure(input: &str, pos: usize) -> String {
     "unexpected input here".to_string()
 }
 
+/// Maximum number of characters of offending text to include in a
+/// trailing-input error message.
+const TRAILING_SNIPPET_MAX_CHARS: usize = 30;
+
+/// First `TRAILING_SNIPPET_MAX_CHARS` characters of `input`, with a trailing
+/// `…` appended if it was truncated. Gives consumers who only see the error
+/// string (server logs, MCP passthrough) enough context to tell what went
+/// wrong without dumping the full remaining input.
+fn trailing_snippet(input: &str) -> String {
+    let mut chars = input.chars();
+    let snippet: String = chars.by_ref().take(TRAILING_SNIPPET_MAX_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{snippet}…")
+    } else {
+        snippet
+    }
+}
+
 /// Top-level LogQL expression.
 #[derive(Debug, Clone)]
 pub enum LogQLExpr {
@@ -149,7 +167,10 @@ pub fn parse_logql(input: &str) -> Result<LogQLExpr, LogQLParseError> {
         let pos = leading_ws + (trimmed.len() - remaining_trimmed.len());
         return Err(LogQLParseError::Parse {
             pos,
-            msg: "unexpected trailing input".to_string(),
+            msg: format!(
+                "unexpected trailing input: {}",
+                trailing_snippet(remaining_trimmed)
+            ),
         });
     }
 
@@ -163,7 +184,10 @@ pub fn parse_logql(input: &str) -> Result<LogQLExpr, LogQLParseError> {
                 let pos = leading_ws + (trimmed.len() - remaining_trimmed.len());
                 Err(LogQLParseError::Parse {
                     pos,
-                    msg: "unexpected trailing input".to_string(),
+                    msg: format!(
+                        "unexpected trailing input: {}",
+                        trailing_snippet(remaining_trimmed)
+                    ),
                 })
             }
         }

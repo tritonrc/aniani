@@ -152,10 +152,37 @@ fn test_metric_bytes_over_time() {
 
 #[test]
 fn test_metric_query_rejects_trailing_garbage() {
-    let result = parse_logql(r#"count_over_time({service="payments"}[5m]) extra junk"#);
+    let msg = parse_logql(r#"count_over_time({service="payments"}[5m]) extra junk"#)
+        .unwrap_err()
+        .to_string();
     assert!(
-        result.is_err(),
-        "trailing input after metric query must error"
+        msg.contains("unexpected trailing input: extra junk"),
+        "got: {msg}"
+    );
+}
+
+#[test]
+fn test_selector_trailing_garbage_keeps_current_message() {
+    // Plain trailing garbage after a stream selector (no pipe) is Err::Error
+    // territory handled by parse_logql's own remaining-input check, not the
+    // pipeline-stage loop's Err::Failure propagation — must still error with
+    // the offending text included.
+    let msg = parse_logql(r#"{a="b"} xyz"#).unwrap_err().to_string();
+    assert!(
+        msg.contains("unexpected trailing input: xyz"),
+        "got: {msg}"
+    );
+}
+
+#[test]
+fn test_trailing_input_snippet_is_truncated_with_ellipsis() {
+    let long_tail = "x".repeat(40);
+    let input = format!(r#"{{a="b"}} {long_tail}"#);
+    let msg = parse_logql(&input).unwrap_err().to_string();
+    let expected_snippet = "x".repeat(30);
+    assert!(
+        msg.contains(&format!("unexpected trailing input: {expected_snippet}…")),
+        "got: {msg}"
     );
 }
 
