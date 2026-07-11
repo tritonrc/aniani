@@ -376,6 +376,24 @@ impl MetricStore {
                 );
             }
         }
+
+        // Drop normalized-name registrations no longer referenced by any
+        // surviving series, so a later metric with a different source name that
+        // normalizes to the same key is not falsely rejected as a collision.
+        if let Some(name_key) = self.interner.get("__name__") {
+            let surviving: FxHashSet<Spur> = self
+                .series
+                .values()
+                .filter_map(|s| {
+                    s.labels
+                        .iter()
+                        .find(|(k, _)| *k == name_key)
+                        .map(|(_, v)| *v)
+                })
+                .collect();
+            self.normalized_name_sources
+                .retain(|normalized, _| surviving.contains(normalized));
+        }
     }
 }
 
@@ -771,5 +789,40 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_clear_service_prunes_normalized_name_sources() {
+        let mut store = MetricStore::new();
+        // A metric whose normalized name collides with a different source name.
+        store.ingest_samples(
+            "http.server.duration",
+            vec![("service".into(), "a".into())],
+            vec![Sample {
+                timestamp_ms: 1,
+                value: 1.0,
+                ingest_seq: 0,
+            }],
+        );
+        // Register the normalized name against its source name.
+        store
+            .register_metric_name("http_server_duration", "http.server.duration")
+            .unwrap();
+
+        // Clearing service "a" should drop the now-orphaned registration.
+        store.clear_service("a");
+        assert!(
+            store.normalized_name_sources.is_empty(),
+            "normalized_name_sources should be pruned after clearing the only service"
+        );
+
+        // A different source name normalizing to the same key must not be
+        // falsely rejected as a collision.
+        assert!(
+            store
+                .check_metric_name_collision("http_server_duration", "http.client.duration")
+                .is_ok(),
+            "no false collision after clear_service pruned the stale registration"
+        );
     }
 }
