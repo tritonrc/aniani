@@ -158,6 +158,7 @@ mod tests {
                     timestamp_ns: 1,
                     line: "x".into(),
                     ingest_seq: 0,
+                    trace_id: None,
                 }],
             );
         }
@@ -208,6 +209,7 @@ mod tests {
                     timestamp_ns: 1,
                     line: "boom".into(),
                     ingest_seq: 0,
+                    trace_id: None,
                 }],
             );
         }
@@ -255,6 +257,7 @@ mod tests {
                     timestamp_ns: 1,
                     line: "x".into(),
                     ingest_seq: 0,
+                    trace_id: None,
                 }],
             );
         }
@@ -292,6 +295,7 @@ mod tests {
                     timestamp_ns: 1,
                     line: "x".into(),
                     ingest_seq: 0,
+                    trace_id: None,
                 }],
             );
         }
@@ -350,6 +354,7 @@ mod tests {
                 timestamp_ns: i,
                 line: format!("line {i}"),
                 ingest_seq: 0,
+                trace_id: None,
             })
             .collect();
         logs.ingest_stream(vec![("service".into(), "api".into())], entries);

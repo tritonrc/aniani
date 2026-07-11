@@ -19,6 +19,9 @@ pub struct LogEntry {
     /// Global monotonic ingest sequence; assigned on store insert.
     #[serde(default)]
     pub ingest_seq: u64,
+    /// Lowercase hex trace id from OTLP logs; `None` for Loki-push entries.
+    #[serde(default)]
+    pub trace_id: Option<String>,
 }
 
 /// A log stream identified by a set of labels.

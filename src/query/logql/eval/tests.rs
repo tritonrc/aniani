@@ -13,16 +13,19 @@ fn make_store() -> LogStore {
                 timestamp_ns: 1_000_000_000,
                 line: "connection timeout to bank API".into(),
                 ingest_seq: 0,
+                trace_id: None,
             },
             LogEntry {
                 timestamp_ns: 2_000_000_000,
                 line: "retry 1/3 failed".into(),
                 ingest_seq: 0,
+                trace_id: None,
             },
             LogEntry {
                 timestamp_ns: 3_000_000_000,
                 line: "healthcheck ok".into(),
                 ingest_seq: 0,
+                trace_id: None,
             },
         ],
     );
@@ -35,6 +38,7 @@ fn make_store() -> LogStore {
             timestamp_ns: 1_500_000_000,
             line: "request received".into(),
             ingest_seq: 0,
+            trace_id: None,
         }],
     );
     store
@@ -109,7 +113,7 @@ fn test_limited_eval_keeps_newest_entries_globally() {
         LogQLResult::Streams(streams) => {
             let mut timestamps: Vec<i64> = streams
                 .iter()
-                .flat_map(|stream| stream.entries.iter().map(|(timestamp, _)| *timestamp))
+                .flat_map(|stream| stream.entries.iter().map(|(timestamp, _, _)| *timestamp))
                 .collect();
             timestamps.sort_unstable();
             assert_eq!(timestamps, vec![2_000_000_000, 3_000_000_000]);
@@ -151,11 +155,13 @@ fn test_json_pipeline_passes_non_json_lines_through() {
                 timestamp_ns: 1_000_000_000,
                 line: r#"{"level":"error","msg":"boom"}"#.into(),
                 ingest_seq: 0,
+                trace_id: None,
             },
             LogEntry {
                 timestamp_ns: 2_000_000_000,
                 line: "plain text not json".into(),
                 ingest_seq: 0,
+                trace_id: None,
             },
         ],
     );
@@ -169,6 +175,73 @@ fn test_json_pipeline_passes_non_json_lines_through() {
                 streams[0].entries.len(),
                 2,
                 "non-JSON line must pass through | json"
+            );
+        }
+        _ => panic!("expected Streams"),
+    }
+}
+
+#[test]
+fn test_stream_query_carries_trace_id_through_to_entries() {
+    let mut store = LogStore::new();
+    store.ingest_stream(
+        vec![("service".into(), "checkout".into())],
+        vec![
+            LogEntry {
+                timestamp_ns: 1_000_000_000,
+                line: "with trace".into(),
+                ingest_seq: 0,
+                trace_id: Some("0102030405060708090a0b0c0d0e0f10".into()),
+            },
+            LogEntry {
+                timestamp_ns: 2_000_000_000,
+                line: "without trace".into(),
+                ingest_seq: 0,
+                trace_id: None,
+            },
+        ],
+    );
+    let expr = crate::query::logql::parser::parse_logql(r#"{service="checkout"}"#).unwrap();
+    let result = evaluate_logql(&expr, &store, 0, i64::MAX, None);
+    match result {
+        LogQLResult::Streams(streams) => {
+            assert_eq!(streams.len(), 1);
+            let entries = &streams[0].entries;
+            assert_eq!(entries.len(), 2);
+            let with_trace = entries.iter().find(|(_, line, _)| line == "with trace");
+            assert_eq!(
+                with_trace.and_then(|(_, _, tid)| tid.as_deref()),
+                Some("0102030405060708090a0b0c0d0e0f10")
+            );
+            let without_trace = entries.iter().find(|(_, line, _)| line == "without trace");
+            assert_eq!(without_trace.and_then(|(_, _, tid)| tid.clone()), None);
+        }
+        _ => panic!("expected Streams"),
+    }
+}
+
+#[test]
+fn test_limited_stream_query_carries_trace_id_through_the_heap() {
+    // The limited (top-N) path routes entries through a BinaryHeap before
+    // regrouping them; verify trace_id survives that path too.
+    let mut store = LogStore::new();
+    store.ingest_stream(
+        vec![("service".into(), "checkout".into())],
+        vec![LogEntry {
+            timestamp_ns: 1_000_000_000,
+            line: "with trace".into(),
+            ingest_seq: 0,
+            trace_id: Some("aabbccddeeff00112233445566778899".into()),
+        }],
+    );
+    let expr = crate::query::logql::parser::parse_logql(r#"{service="checkout"}"#).unwrap();
+    let result = evaluate_logql_limited(&expr, &store, 0, i64::MAX, None, Some(10));
+    match result {
+        LogQLResult::Streams(streams) => {
+            assert_eq!(streams.len(), 1);
+            assert_eq!(
+                streams[0].entries[0].2.as_deref(),
+                Some("aabbccddeeff00112233445566778899")
             );
         }
         _ => panic!("expected Streams"),

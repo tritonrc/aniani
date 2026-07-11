@@ -145,6 +145,7 @@ mod tests {
                 timestamp_ns: 1000,
                 line: "hello".into(),
                 ingest_seq: 0,
+                trace_id: None,
             }],
         );
 
@@ -180,6 +181,7 @@ mod tests {
                 timestamp_ns: 1000,
                 line: "hello".into(),
                 ingest_seq: 99,
+                trace_id: None,
             }],
         );
 

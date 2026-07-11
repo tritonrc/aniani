@@ -64,7 +64,7 @@ pub(in crate::mcp::tools) fn handle_query_logs(
     };
     let mut out: Vec<Value> = Vec::new();
     for s in streams {
-        for (ts, line) in s.entries {
+        for (ts, line, _trace_id) in s.entries {
             out.push(
                 json!({ "ts": (ts / 1_000_000).to_string(), "line": line, "labels": s.labels }),
             );
@@ -113,6 +113,7 @@ mod tests {
                     timestamp_ns: 5,
                     line: "hello".into(),
                     ingest_seq: 0,
+                    trace_id: None,
                 }],
             );
         }
@@ -142,6 +143,7 @@ mod tests {
                     timestamp_ns: i,
                     line: format!("line {i}"),
                     ingest_seq: 0,
+                    trace_id: None,
                 })
                 .collect();
             logs.ingest_stream(vec![("service".into(), "api".into())], entries);
@@ -202,6 +204,7 @@ mod tests {
                 timestamp_ns: i,
                 line: format!("line {i}"),
                 ingest_seq: 0,
+                trace_id: None,
             })
             .collect();
         logs.ingest_stream(vec![("service".into(), "api".into())], entries);

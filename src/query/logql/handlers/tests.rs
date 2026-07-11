@@ -143,3 +143,46 @@ fn test_effective_step_from_metric_query_range() {
     };
     assert_eq!(effective, Some(5_000_000_000));
 }
+
+#[test]
+fn test_format_logql_result_omits_trace_id_metadata_when_absent() {
+    use super::super::eval::{LogQLResult, StreamResult};
+
+    let result = LogQLResult::Streams(vec![StreamResult {
+        labels: vec![("service".into(), "api".into())],
+        entries: vec![(1_000, "hello".into(), None)],
+    }]);
+    let json = format_logql_result(result, 10);
+    let values = json["data"]["result"][0]["values"].as_array().unwrap();
+    assert_eq!(values.len(), 1);
+    let entry = values[0].as_array().unwrap();
+    assert_eq!(entry.len(), 2, "Loki-origin entries stay 2-element: {json}");
+    assert_eq!(entry[0], "1000");
+    assert_eq!(entry[1], "hello");
+}
+
+#[test]
+fn test_format_logql_result_includes_trace_id_metadata_when_present() {
+    use super::super::eval::{LogQLResult, StreamResult};
+
+    let result = LogQLResult::Streams(vec![StreamResult {
+        labels: vec![("service".into(), "checkout".into())],
+        entries: vec![(
+            2_000,
+            "charged card".into(),
+            Some("0102030405060708090a0b0c0d0e0f10".into()),
+        )],
+    }]);
+    let json = format_logql_result(result, 10);
+    let values = json["data"]["result"][0]["values"].as_array().unwrap();
+    assert_eq!(values.len(), 1);
+    let entry = values[0].as_array().unwrap();
+    assert_eq!(
+        entry.len(),
+        3,
+        "OTLP-origin entries with a trace id gain a 3rd metadata element: {json}"
+    );
+    assert_eq!(entry[0], "2000");
+    assert_eq!(entry[1], "charged card");
+    assert_eq!(entry[2]["trace_id"], "0102030405060708090a0b0c0d0e0f10");
+}

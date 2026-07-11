@@ -238,26 +238,28 @@ fn format_logql_result(result: LogQLResult, limit: usize) -> Value {
     match result {
         LogQLResult::Streams(mut streams) => {
             // Apply limit globally across all streams, not per-stream.
-            // Collect all (stream_idx, timestamp, line) tuples, sort by timestamp
-            // descending (newest first), take `limit`, then redistribute.
+            // Collect all (stream_idx, timestamp, line, trace_id) tuples, sort by
+            // timestamp descending (newest first), take `limit`, then redistribute.
             let total_entries: usize = streams.iter().map(|s| s.entries.len()).sum();
             if total_entries > limit {
-                let mut all: Vec<(usize, i64, String)> = streams
+                let mut all: Vec<(usize, i64, String, Option<String>)> = streams
                     .iter_mut()
                     .enumerate()
                     .flat_map(|(idx, sr)| {
-                        sr.entries.drain(..).map(move |(ts, line)| (idx, ts, line))
+                        sr.entries
+                            .drain(..)
+                            .map(move |(ts, line, trace_id)| (idx, ts, line, trace_id))
                     })
                     .collect();
                 all.sort_by_key(|b| std::cmp::Reverse(b.1)); // newest first
                 all.truncate(limit);
                 // Put entries back into their streams
-                for (idx, ts, line) in all {
-                    streams[idx].entries.push((ts, line));
+                for (idx, ts, line, trace_id) in all {
+                    streams[idx].entries.push((ts, line, trace_id));
                 }
                 // Re-sort each stream's entries by timestamp ascending
                 for sr in &mut streams {
-                    sr.entries.sort_by_key(|(ts, _)| *ts);
+                    sr.entries.sort_by_key(|(ts, _, _)| *ts);
                 }
             }
 
@@ -270,10 +272,16 @@ fn format_logql_result(result: LogQLResult, limit: usize) -> Value {
                         .into_iter()
                         .map(|(k, v)| (k, Value::String(v)))
                         .collect();
+                    // Loki structured-metadata shape: a 2-element array when there is
+                    // no trace id (matches vanilla Loki), 3-element with a
+                    // `{"trace_id": ...}` metadata object when there is one.
                     let values: Vec<Value> = sr
                         .entries
                         .into_iter()
-                        .map(|(ts, line)| json!([ts.to_string(), line]))
+                        .map(|(ts, line, trace_id)| match trace_id {
+                            Some(tid) => json!([ts.to_string(), line, {"trace_id": tid}]),
+                            None => json!([ts.to_string(), line]),
+                        })
                         .collect();
                     json!({
                         "stream": labels_map,

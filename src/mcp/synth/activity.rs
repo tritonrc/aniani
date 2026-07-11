@@ -280,11 +280,13 @@ mod tests {
                         timestamp_ns: 10,
                         line: "boom1".into(),
                         ingest_seq: 0,
+                        trace_id: None,
                     },
                     LogEntry {
                         timestamp_ns: 20,
                         line: "boom2".into(),
                         ingest_seq: 5,
+                        trace_id: None,
                     },
                 ],
             );
@@ -336,6 +338,7 @@ mod tests {
                     timestamp_ns: 1,
                     line: "ok".into(),
                     ingest_seq: 0,
+                    trace_id: None,
                 }],
             );
             logs.ingest_stream(
@@ -347,6 +350,7 @@ mod tests {
                     timestamp_ns: 2,
                     line: "bad".into(),
                     ingest_seq: 1,
+                    trace_id: None,
                 }],
             );
         }

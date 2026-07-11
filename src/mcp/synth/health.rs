@@ -156,6 +156,7 @@ mod tests {
                     timestamp_ns: 1,
                     line: "ok".into(),
                     ingest_seq: 0,
+                    trace_id: None,
                 }],
             );
             logs.ingest_stream(
@@ -167,6 +168,7 @@ mod tests {
                     timestamp_ns: 2,
                     line: "err".into(),
                     ingest_seq: 1,
+                    trace_id: None,
                 }],
             );
         }

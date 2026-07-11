@@ -104,6 +104,7 @@ pub fn ingest_logs(state: &AppState, request: ExportLogsServiceRequest) -> usize
                     timestamp_ns,
                     line,
                     ingest_seq: state.ingest_seq.fetch_add(1, Ordering::Relaxed),
+                    trace_id: trace_id_hex(&log_record.trace_id),
                 };
 
                 match key_index.get(&labels).copied() {
@@ -126,6 +127,18 @@ pub fn ingest_logs(state: &AppState, request: ExportLogsServiceRequest) -> usize
 
     tracing::debug!(entries = entry_count, "ingested OTLP logs");
     entry_count
+}
+
+/// Hex-encode a trace id from an OTLP log record.
+///
+/// Returns `None` for an empty id and for an all-zero id: OTLP allows all-zero
+/// bytes but treats them as semantically "no trace" (the same convention the
+/// trace ingestion path uses for absent parent span ids).
+fn trace_id_hex(trace_id: &[u8]) -> Option<String> {
+    if trace_id.is_empty() || trace_id.iter().all(|&b| b == 0) {
+        return None;
+    }
+    Some(trace_id.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 fn current_time_ns() -> i64 {
@@ -199,6 +212,10 @@ mod ingest_seq_tests {
     }
 
     fn one_log(msg: &str) -> ExportLogsServiceRequest {
+        one_log_with_trace_id(msg, vec![])
+    }
+
+    fn one_log_with_trace_id(msg: &str, trace_id: Vec<u8>) -> ExportLogsServiceRequest {
         ExportLogsServiceRequest {
             resource_logs: vec![ResourceLogs {
                 resource: None,
@@ -216,7 +233,7 @@ mod ingest_seq_tests {
                         attributes: vec![],
                         dropped_attributes_count: 0,
                         flags: 0,
-                        trace_id: vec![],
+                        trace_id,
                         span_id: vec![],
                         event_name: String::new(),
                     }],
@@ -288,5 +305,60 @@ mod ingest_seq_tests {
         );
         assert!(labels.iter().any(|(k, v)| k == "level" && v == "info"));
         assert!(!labels.iter().any(|(k, v)| k == "level" && v == "debug"));
+    }
+
+    #[test]
+    fn log_record_trace_id_is_hex_encoded_onto_the_entry() {
+        let st = state();
+        let trace_id: Vec<u8> = (0..16u8).collect(); // 000102...0f
+        ingest_logs(&st, one_log_with_trace_id("boom", trace_id));
+
+        let store = st.log_store.read();
+        let entry = store
+            .streams
+            .values()
+            .next()
+            .unwrap()
+            .entries
+            .first()
+            .unwrap();
+        assert_eq!(
+            entry.trace_id.as_deref(),
+            Some("000102030405060708090a0b0c0d0e0f")
+        );
+    }
+
+    #[test]
+    fn log_record_without_trace_id_leaves_it_none() {
+        let st = state();
+        ingest_logs(&st, one_log("no trace"));
+
+        let store = st.log_store.read();
+        let entry = store
+            .streams
+            .values()
+            .next()
+            .unwrap()
+            .entries
+            .first()
+            .unwrap();
+        assert_eq!(entry.trace_id, None);
+    }
+
+    #[test]
+    fn log_record_all_zero_trace_id_is_treated_as_absent() {
+        let st = state();
+        ingest_logs(&st, one_log_with_trace_id("zeroed", vec![0u8; 16]));
+
+        let store = st.log_store.read();
+        let entry = store
+            .streams
+            .values()
+            .next()
+            .unwrap()
+            .entries
+            .first()
+            .unwrap();
+        assert_eq!(entry.trace_id, None);
     }
 }

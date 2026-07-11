@@ -383,6 +383,7 @@ mod ingest_seq_restore_tests {
                 timestamp_ns: 1,
                 line: "x".into(),
                 ingest_seq: 41,
+                trace_id: None,
             }],
         );
         let metrics = MetricStore::new();

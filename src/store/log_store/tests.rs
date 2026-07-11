@@ -6,7 +6,24 @@ fn make_entry(ts: i64, line: &str) -> LogEntry {
         timestamp_ns: ts,
         line: line.to_string(),
         ingest_seq: 0,
+        trace_id: None,
     }
+}
+
+#[test]
+fn test_log_entry_deserializes_legacy_shape_without_trace_id() {
+    // Simulates a snapshot written before `trace_id` existed: no `trace_id` key
+    // at all. `#[serde(default)]` must fill it in as `None` rather than fail.
+    let legacy_json = serde_json::json!({
+        "timestamp_ns": 1000,
+        "line": "hello",
+        "ingest_seq": 5,
+    });
+    let entry: LogEntry = serde_json::from_value(legacy_json).unwrap();
+    assert_eq!(entry.timestamp_ns, 1000);
+    assert_eq!(entry.line, "hello");
+    assert_eq!(entry.ingest_seq, 5);
+    assert_eq!(entry.trace_id, None);
 }
 
 #[test]
@@ -273,6 +290,7 @@ fn test_internally_unsorted_batch_after_tail() {
             timestamp_ns: 100,
             line: "a".into(),
             ingest_seq: 0,
+            trace_id: None,
         }],
     );
     // Append internally unsorted batch — all > 100
@@ -283,11 +301,13 @@ fn test_internally_unsorted_batch_after_tail() {
                 timestamp_ns: 300,
                 line: "c".into(),
                 ingest_seq: 0,
+                trace_id: None,
             },
             LogEntry {
                 timestamp_ns: 200,
                 line: "b".into(),
                 ingest_seq: 0,
+                trace_id: None,
             },
         ],
     );
