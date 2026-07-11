@@ -378,7 +378,10 @@ fn apply_stages(line: &str, stages: &[PipelineStage]) -> bool {
             PipelineStage::JsonExtract => {
                 let parsed: serde_json::Value = match serde_json::from_str(line) {
                     Ok(v) => v,
-                    Err(_) => return false, // drop lines that fail JSON parsing
+                    // Non-JSON lines pass through with no labels extracted,
+                    // matching real LogQL: | json only extracts labels, it
+                    // never filters lines out.
+                    Err(_) => continue,
                 };
                 if let serde_json::Value::Object(map) = parsed {
                     for (k, v) in map {
@@ -581,6 +584,40 @@ mod tests {
                 assert!(results[0].samples[0].1 >= 3.0);
             }
             _ => panic!("expected Matrix"),
+        }
+    }
+
+    #[test]
+    fn test_json_pipeline_passes_non_json_lines_through() {
+        let mut store = LogStore::new();
+        store.ingest_stream(
+            vec![("service".into(), "mix".into())],
+            vec![
+                LogEntry {
+                    timestamp_ns: 1_000_000_000,
+                    line: r#"{"level":"error","msg":"boom"}"#.into(),
+                    ingest_seq: 0,
+                },
+                LogEntry {
+                    timestamp_ns: 2_000_000_000,
+                    line: "plain text not json".into(),
+                    ingest_seq: 0,
+                },
+            ],
+        );
+        // | json should NOT drop the non-JSON line.
+        let expr = crate::query::logql::parser::parse_logql(r#"{service="mix"} | json"#).unwrap();
+        let result = evaluate_logql(&expr, &store, 0, i64::MAX, None);
+        match result {
+            LogQLResult::Streams(streams) => {
+                assert_eq!(streams.len(), 1, "one stream");
+                assert_eq!(
+                    streams[0].entries.len(),
+                    2,
+                    "non-JSON line must pass through | json"
+                );
+            }
+            _ => panic!("expected Streams"),
         }
     }
 }
