@@ -473,9 +473,22 @@ const TraceView = {
               <div class="tl-meta">
                 <div>
                   <span class="k">Service</span>
-                  <span class="v pivot-links">
-                    {{ row.span.service }}
-                    <a v-for="l in signalLinks(row.span.service)" :key="l.label" :href="l.href">{{ l.label }}</a>
+                  <span class="v tl-svc-cell">
+                    <span class="tl-svc-name" :title="row.span.service">{{ row.span.service }}</span>
+                    <span class="sig-icons">
+                      <a
+                        v-for="l in signalLinks(row.span.service)"
+                        :key="l.label"
+                        class="sig-icon"
+                        :href="l.href"
+                        :title="'View ' + l.label + ' for ' + row.span.service"
+                        :aria-label="'View ' + l.label + ' for ' + row.span.service"
+                      >
+                        <svg v-if="l.label === 'logs'" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 4h10M3 8h10M3 12h7"/></svg>
+                        <svg v-else-if="l.label === 'metrics'" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polyline points="2 12 6 7 9 10 14 4"/></svg>
+                        <svg v-else viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 4h6M6 8h6M10 12h4"/></svg>
+                      </a>
+                    </span>
                   </span>
                 </div>
                 <div><span class="k">Operation</span><span class="v">{{ row.span.name }}</span></div>

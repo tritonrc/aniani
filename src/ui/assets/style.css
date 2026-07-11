@@ -382,6 +382,11 @@ header h1 { margin: 16px 0 8px; font-size: 20px; }
 .tl-meta .v.err { color: var(--error); }
 .tl-meta .v.ok { color: var(--ok); }
 .tl-meta .v.mono, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.tl-svc-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; word-break: normal; }
+.tl-svc-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sig-icons { display: flex; gap: 6px; margin-top: 2px; }
+.sig-icon { color: var(--muted); display: inline-flex; }
+.sig-icon:hover { color: var(--accent); }
 
 .tl-section { margin-top: 12px; }
 .tl-section h4 { margin: 0 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
