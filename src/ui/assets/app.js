@@ -1037,12 +1037,16 @@ const LineChart = {
     xTicks() {
       const dom = this.xDomain
       if (!dom) return []
-      if (dom.max <= dom.min) return [{ x: this.xScale(dom.min), label: formatHM(dom.min) }]
+      if (dom.max <= dom.min) return [{ x: this.xScale(dom.min), label: formatHM(dom.min), anchor: 'middle' }]
       const n = 5
       const out = []
       for (let i = 0; i < n; i++) {
         const t = dom.min + ((dom.max - dom.min) * i) / (n - 1)
-        out.push({ x: this.xScale(t), label: formatHM(t) })
+        // First/last tick sit right at the plot edges — anchoring them by their
+        // near edge (instead of centering) keeps the label inside the svg
+        // instead of overflowing past x=0 or x=800.
+        const anchor = i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle'
+        out.push({ x: this.xScale(t), label: formatHM(t), anchor })
       }
       return out
     },
@@ -1109,7 +1113,7 @@ const LineChart = {
         <template v-if="hasData">
           <line v-for="yt in yTicks" :key="'gy' + yt.y" class="lc-grid" :x1="plot.l" :x2="800 - margin.r" :y1="yt.y" :y2="yt.y"></line>
           <text v-for="yt in yTicks" :key="'yl' + yt.y" class="lc-axis-label" :x="plot.l - 6" :y="yt.y + 3" text-anchor="end">{{ yt.label }}</text>
-          <text v-for="xt in xTicks" :key="'xl' + xt.x" class="lc-axis-label" :x="xt.x" y="234" text-anchor="middle">{{ xt.label }}</text>
+          <text v-for="xt in xTicks" :key="'xl' + xt.x" class="lc-axis-label" :x="xt.x" y="234" :text-anchor="xt.anchor">{{ xt.label }}</text>
           <g v-for="s in chartSeries" :key="s.name">
             <path v-if="s.d" :d="s.d" fill="none" :stroke="s.color" stroke-width="1.5"></path>
             <circle v-if="s.solo" :cx="s.solo.x" :cy="s.solo.y" r="3" :fill="s.color"></circle>
