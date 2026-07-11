@@ -98,6 +98,9 @@ header h1 { margin: 16px 0 8px; font-size: 20px; }
   color: var(--muted);
 }
 .qb-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
   padding: 5px 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12.5px;
@@ -107,6 +110,33 @@ header h1 { margin: 16px 0 8px; font-size: 20px; }
 .qb-item:hover, .qb-item.sel {
   background: rgba(78, 161, 255, 0.14);
   border-left-color: var(--accent);
+}
+.qb-item-text { flex: 0 1 auto; }
+.qb-item-detail {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.85em;
+  font-weight: normal;
+  white-space: nowrap;
+}
+.qb-star {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 6px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.9em;
+  line-height: 1;
+}
+.qb-star:hover { color: var(--fg); }
+.qb-star.on { color: #e6b450; }
+.qb-doc {
+  border-top: 1px solid var(--border);
+  padding: 6px 10px;
+  color: var(--muted);
+  font-size: 0.85em;
+  line-height: 1.35;
+  white-space: normal;
 }
 
 .error { color: var(--error); white-space: pre-wrap; }
