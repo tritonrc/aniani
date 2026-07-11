@@ -667,21 +667,31 @@ const AiAsk = {
   props: { lang: { type: String, required: true } },
   emits: ['query'],
   template: `
-    <div class="ai-ask" v-if="supported">
-      <input
-        v-model="text"
-        :placeholder="placeholder"
-        spellcheck="false"
-        @keydown.enter.prevent="ask"
-      />
-      <button @click="ask" :disabled="busy">
-        {{ busy ? (downloading ? 'Downloading model…' : 'Thinking…') : 'Ask AI' }}
-      </button>
-      <span class="ai-status" v-if="status">{{ status }}</span>
-    </div>
+    <template v-if="apiPresent">
+      <div class="ai-ask" v-if="state !== 'unavailable' && state !== 'unknown'">
+        <input
+          v-model="text"
+          :placeholder="placeholder"
+          spellcheck="false"
+          @keydown.enter.prevent="ask"
+        />
+        <button @click="ask" :disabled="busy">
+          {{ busy ? (downloading ? 'Downloading model…' : 'Thinking…') : 'Ask AI' }}
+        </button>
+        <span class="ai-status" v-if="status">{{ status }}</span>
+      </div>
+      <p class="muted ai-hint" v-else-if="state === 'unavailable'">AI assist requires Chrome's built-in model.</p>
+    </template>
   `,
   data() {
-    return { supported: false, state: 'unknown', text: '', busy: false, downloading: false, status: '' }
+    return {
+      apiPresent: 'LanguageModel' in globalThis,
+      state: 'unknown',
+      text: '',
+      busy: false,
+      downloading: false,
+      status: '',
+    }
   },
   computed: {
     placeholder() {
@@ -697,12 +707,11 @@ const AiAsk = {
     },
   },
   async mounted() {
-    if (!('LanguageModel' in globalThis)) return
+    if (!this.apiPresent) return
     try {
       this.state = await globalThis.LanguageModel.availability(AI_TEXT_EN)
-      this.supported = this.state !== 'unavailable'
     } catch (_) {
-      this.supported = false
+      this.state = 'unavailable'
     }
   },
   methods: {
@@ -783,6 +792,8 @@ const Logs = {
       <form class="query-bar" @submit.prevent="onSubmit">
         <input
           v-model="query"
+          name="logs-query"
+          id="logs-query"
           list="logs-suggestions"
           placeholder='{service="my-service"}'
           spellcheck="false"
@@ -1252,6 +1263,8 @@ const Metrics = {
       <form class="query-bar" @submit.prevent="run">
         <input
           v-model="query"
+          name="metrics-query"
+          id="metrics-query"
           list="metric-names"
           placeholder="rate(http_requests_total[5m])"
           spellcheck="false"
@@ -1372,6 +1385,8 @@ const Traces = {
       <form class="query-bar" @submit.prevent="run">
         <input
           v-model="query"
+          name="traces-query"
+          id="traces-query"
           list="traces-suggestions"
           placeholder='{ resource.service.name = "my-service" }'
           spellcheck="false"
@@ -1590,9 +1605,12 @@ function routeAware(tabId) {
       }
       this._rerun = () => { if (this.query) this.run() }
       window.__aniani.activeRerun = this._rerun
+      this._queryInput = () => this.$el.querySelector('.query-bar input')
+      window.__aniani.activeQueryInput = this._queryInput
     },
     deactivated() {
       if (window.__aniani.activeRerun === this._rerun) window.__aniani.activeRerun = null
+      if (window.__aniani.activeQueryInput === this._queryInput) window.__aniani.activeQueryInput = null
     },
   }
 }
@@ -1708,7 +1726,21 @@ window.__aniani = {
   rangeStartMs, rangeToSec, timeRange, customWindow,
   activeRerun: null,
   clearExplicitWindow: null,
+  activeQueryInput: null,
 }
+
+// Global `/` shortcut: focus the active view's query input, unless the user
+// is already typing in a form control (or chording with a modifier key).
+window.addEventListener('keydown', (e) => {
+  if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return
+  const tag = document.activeElement && document.activeElement.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+  if (!window.__aniani.activeQueryInput) return
+  const input = window.__aniani.activeQueryInput()
+  if (!input) return
+  e.preventDefault()
+  input.focus()
+})
 
 loadVocab()
 syncFromLocation()
