@@ -560,6 +560,392 @@ async function loadCatalog(service) {
   } catch (_) { return null }
 }
 
+// --- QueryBar: shared LogQL/PromQL/TraceQL autocomplete + history ----------
+
+// Lazily-fetched label key/value cache for a query language's labels. `keys`
+// is null until first fetched (then an array, possibly empty); `values[key]`
+// follows the same convention per label name. A failed fetch caches an empty
+// array rather than retrying every keystroke.
+function makeLabelCache(keysUrl, valuesUrl) {
+  const cache = reactive({ keys: null, values: {} })
+  async function loadKeys() {
+    if (cache.keys) return cache.keys
+    try {
+      const res = await apiGet(keysUrl)
+      cache.keys = res.data || []
+    } catch (_) {
+      cache.keys = []
+    }
+    return cache.keys
+  }
+  async function loadValues(key) {
+    if (cache.values[key]) return cache.values[key]
+    try {
+      const res = await apiGet(valuesUrl(key))
+      cache.values[key] = res.data || []
+    } catch (_) {
+      cache.values[key] = []
+    }
+    return cache.values[key]
+  }
+  return { cache, loadKeys, loadValues }
+}
+const logqlLabels = makeLabelCache(
+  '/loki/api/v1/labels',
+  (k) => '/loki/api/v1/label/' + encodeURIComponent(k) + '/values',
+)
+const promqlLabels = makeLabelCache(
+  '/api/v1/labels',
+  (k) => '/api/v1/label/' + encodeURIComponent(k) + '/values',
+)
+
+// PromQL functions Aniani actually evaluates — the eval_call match arms plus
+// the aggregation ops eval_aggregation accepts, in src/query/promql/eval/
+// (mod.rs and aggregation.rs). Nothing beyond this set parses successfully.
+const PROMQL_FUNCTIONS = [
+  'rate', 'increase', 'irate', 'delta', 'deriv',
+  'histogram_quantile',
+  'abs', 'ceil', 'floor', 'round',
+  'label_replace', 'label_join',
+  'absent',
+  'sort', 'sort_desc',
+  'clamp', 'clamp_min', 'clamp_max',
+  'time', 'vector', 'scalar',
+  'sum', 'avg', 'max', 'min', 'count',
+  'topk', 'bottomk',
+]
+const PROMQL_DURATIONS = ['1m', '5m', '15m', '1h']
+const LOGQL_LINE_OPS = ['|=', '!=', '|~', '!~']
+const TRACEQL_STATUS_VALUES = ['error', 'ok', 'unset']
+const TRACEQL_DURATIONS = ['100ms', '250ms', '500ms', '1s']
+// The only keys src/query/traceql/parser.rs gives dedicated grammar to
+// (parse_condition dispatches on "duration", "status", "name" by keyword;
+// everything else falls through to a resource./span. attribute). Span/resource
+// attribute keys are open-ended and not cheaply enumerable without picking an
+// arbitrary service, so they're left out rather than guessed at.
+const TRACEQL_KEYS = ['resource.service.name', 'duration', 'status', 'name']
+// Completion text for a trace key primes the next keystroke into its own
+// suggestion context — e.g. accepting "resource.service.name" leaves the
+// cursor right after `= "`, which immediately triggers the label-values
+// context below.
+const TRACEQL_KEY_INSERT = {
+  'resource.service.name': 'resource.service.name = "',
+  name: 'name = "',
+  status: 'status = ',
+  duration: 'duration ',
+}
+
+// Index where the partial token being typed begins: the run of `[\w.-]` chars
+// immediately before the cursor (dots for dotted attribute keys, hyphens for
+// label values like "us-east"; without the hyphen the context detector would
+// flip back to label-keys mid-value).
+function partialTokenStart(before) {
+  const m = before.match(/[\w.-]*$/)
+  return before.length - (m ? m[0].length : 0)
+}
+
+// Count of unmatched `open` brackets in `text`. Naive (it doesn't understand
+// quoting), which is fine for a lightweight suggestion heuristic.
+function bracketDepth(text, open, close) {
+  let depth = 0
+  for (const c of text) {
+    if (c === open) depth++
+    else if (c === close) depth = Math.max(0, depth - 1)
+  }
+  return depth
+}
+
+const LABEL_VALUE_RE = /([\w]+)\s*(=~?|!~|!=)\s*"$/
+const TRACE_VALUE_RE = /([\w.]+)\s*(=~?|!~|!=)\s*"$/
+
+function suggestLogql(text, pos) {
+  const before = text.slice(0, pos)
+  const partialStart = partialTokenStart(before)
+  const beforePartial = before.slice(0, partialStart)
+  const valueMatch = beforePartial.match(LABEL_VALUE_RE)
+  if (valueMatch) return { kind: 'label-values', key: valueMatch[1], partialStart }
+  if (bracketDepth(before, '{', '}') > 0) return { kind: 'label-keys', partialStart }
+  if (before.includes('}')) {
+    // The partial for an operator is the trailing run of operator chars, not
+    // word chars — so an already-typed `|` is replaced by the accepted `|=`
+    // instead of doubled.
+    const opPartial = before.match(/[|!~=]*$/)
+    return { kind: 'line-ops', partialStart: before.length - opPartial[0].length }
+  }
+  return null
+}
+
+function suggestPromql(text, pos) {
+  const before = text.slice(0, pos)
+  const partialStart = partialTokenStart(before)
+  const beforePartial = before.slice(0, partialStart)
+  if (bracketDepth(before, '{', '}') > 0) {
+    const valueMatch = beforePartial.match(LABEL_VALUE_RE)
+    if (valueMatch) return { kind: 'label-values', key: valueMatch[1], partialStart }
+    return { kind: 'label-keys', partialStart }
+  }
+  if (bracketDepth(before, '[', ']') > 0) return { kind: 'durations', partialStart }
+  return { kind: 'metrics-fns', partialStart }
+}
+
+function suggestTraceql(text, pos) {
+  const before = text.slice(0, pos)
+  if (bracketDepth(before, '{', '}') <= 0) return null
+  const partialStart = partialTokenStart(before)
+  const beforePartial = before.slice(0, partialStart)
+  const valueMatch = beforePartial.match(TRACE_VALUE_RE)
+  if (valueMatch) return { kind: 'label-values', key: valueMatch[1], partialStart }
+  if (/status\s*(=|!=)\s*$/.test(beforePartial)) return { kind: 'status-values', partialStart }
+  if (/duration\s*(=|!=|>=|<=|>|<)\s*$/.test(beforePartial)) return { kind: 'durations', partialStart }
+  return { kind: 'trace-keys', partialStart }
+}
+
+// Context-aware suggestion classifier, shared by all three query languages.
+// Returns null when there's nothing contextual to suggest (the caller falls
+// back to history in that case). `partialStart` is where the in-progress
+// token — the text an accepted suggestion replaces — begins.
+export function suggestContext(lang, text, pos) {
+  if (lang === 'promql') return suggestPromql(text, pos)
+  if (lang === 'traceql') return suggestTraceql(text, pos)
+  return suggestLogql(text, pos)
+}
+
+// Candidate list for a resolved context, as { text, insert } pairs ready for
+// display and insertion. Reads the lazily-fetched label caches and the shared
+// vocab directly (both reactive, so callers re-render once data loads).
+function contextItems(lang, ctx, metricNamesProp) {
+  const kind = ctx.kind
+  if (kind === 'label-keys') {
+    const cache = lang === 'promql' ? promqlLabels.cache : logqlLabels.cache
+    return (cache.keys || []).map((k) => ({ text: k, insert: k + '="' }))
+  }
+  if (kind === 'label-values') {
+    let values
+    if (lang === 'traceql') {
+      values = ctx.key === 'resource.service.name' ? (vocab.services || []).map((s) => s.name) : []
+    } else {
+      const cache = lang === 'promql' ? promqlLabels.cache : logqlLabels.cache
+      values = cache.values[ctx.key] || []
+    }
+    return values.map((v) => ({ text: v, insert: v + '"' }))
+  }
+  if (kind === 'line-ops') {
+    return LOGQL_LINE_OPS.map((op) => ({ text: op, insert: op + ' "' }))
+  }
+  if (kind === 'durations') {
+    const list = lang === 'traceql' ? TRACEQL_DURATIONS : PROMQL_DURATIONS
+    return list.map((d) => ({ text: d, insert: d }))
+  }
+  if (kind === 'status-values') {
+    return TRACEQL_STATUS_VALUES.map((s) => ({ text: s, insert: s }))
+  }
+  if (kind === 'trace-keys') {
+    return TRACEQL_KEYS.map((k) => ({ text: k, insert: TRACEQL_KEY_INSERT[k] }))
+  }
+  if (kind === 'metrics-fns') {
+    const names = metricNamesProp || vocab.metricNames || []
+    const metricItems = names.map((n) => ({ text: n, insert: n }))
+    const fnItems = PROMQL_FUNCTIONS.map((f) => ({ text: f + '(', insert: f + '(' }))
+    return [...metricItems, ...fnItems]
+  }
+  return []
+}
+
+// Ensures the label cache data a resolved context needs is loaded (a no-op
+// once cached). TraceQL contexts never need a fetch — their data is static or
+// drawn from the already-loaded vocab.
+function ensureContextData(lang, ctx) {
+  if (lang === 'traceql') return Promise.resolve()
+  const cache = lang === 'promql' ? promqlLabels : logqlLabels
+  if (ctx.kind === 'label-keys') return cache.loadKeys()
+  if (ctx.kind === 'label-values') return cache.loadValues(ctx.key)
+  return Promise.resolve()
+}
+
+// --- query history: localStorage-backed, most-recent-first, capped ---------
+const QHISTORY_CAP = 50
+
+function historyKey(lang) {
+  return 'aniani.qhistory.' + lang
+}
+export function historyFor(lang) {
+  try {
+    const raw = localStorage.getItem(historyKey(lang))
+    const arr = raw ? JSON.parse(raw) : []
+    return Array.isArray(arr) ? arr : []
+  } catch (_) {
+    return []
+  }
+}
+export function recordHistory(lang, q) {
+  if (!q || !q.trim()) return
+  try {
+    const cur = historyFor(lang).filter((x) => x !== q)
+    cur.unshift(q)
+    localStorage.setItem(historyKey(lang), JSON.stringify(cur.slice(0, QHISTORY_CAP)))
+  } catch (_) {
+    // localStorage unavailable (private mode, quota) — history just won't persist.
+  }
+}
+
+// Human-readable group header per suggestion kind, shown above the dropdown items.
+const KIND_LABELS = {
+  'label-keys': 'labels',
+  'label-values': 'values',
+  'line-ops': 'operators',
+  durations: 'durations',
+  'metrics-fns': 'metrics & functions',
+  'trace-keys': 'keys',
+  'status-values': 'status',
+}
+
+// Shared autocomplete input for the Logs/Metrics/Traces query bars: keeps the
+// `.query-bar input` structure routeAware and the `/` shortcut depend on,
+// layers a context-aware suggestion dropdown and query history on top.
+const QueryBar = {
+  props: {
+    lang: { type: String, required: true },
+    modelValue: { type: String, default: '' },
+    placeholder: { type: String, default: '' },
+    loading: { type: Boolean, default: false },
+    metricNames: { type: Array, default: null },
+  },
+  emits: ['update:modelValue', 'run'],
+  data() {
+    return { open: false, selIdx: -1, ctx: null, cursorPos: 0 }
+  },
+  computed: {
+    isEmpty() {
+      return !this.modelValue || !this.modelValue.trim()
+    },
+    groupLabel() {
+      if (this.isEmpty) return 'recent'
+      return (this.ctx && KIND_LABELS[this.ctx.kind]) || ''
+    },
+    displayItems() {
+      if (this.isEmpty) {
+        return historyFor(this.lang)
+          .slice(0, 8)
+          .map((q) => ({ text: q, insert: q, replaceAll: true }))
+      }
+      if (!this.ctx) return []
+      const partial = this.modelValue.slice(this.ctx.partialStart, this.cursorPos).toLowerCase()
+      const items = contextItems(this.lang, this.ctx, this.metricNames)
+      const filtered = partial ? items.filter((it) => it.text.toLowerCase().includes(partial)) : items
+      return filtered.slice(0, 12)
+    },
+  },
+  methods: {
+    // `text` is the live input value. onInput must pass e.target.value: the
+    // modelValue prop lags the emit by a render, so computing the context
+    // from it would classify against the previous keystroke's text.
+    refreshCtx(text) {
+      const el = this.$refs.input
+      this.cursorPos = el ? el.selectionStart : text.length
+      this.ctx = suggestContext(this.lang, text, this.cursorPos)
+      if (this.ctx) ensureContextData(this.lang, this.ctx)
+    },
+    openDrop(text) {
+      this.refreshCtx(typeof text === 'string' ? text : this.modelValue)
+      this.open = true
+    },
+    onInput(e) {
+      this.$emit('update:modelValue', e.target.value)
+      this.selIdx = -1
+      this.openDrop(e.target.value)
+    },
+    onBlur() {
+      // Delayed so a mousedown-triggered accept() below fires before the
+      // dropdown unmounts (blur otherwise beats click).
+      setTimeout(() => { this.open = false }, 120)
+    },
+    onKeydown(e) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        if (!this.open) this.openDrop()
+        const n = this.displayItems.length
+        if (!n) return
+        if (e.key === 'ArrowDown') this.selIdx = (this.selIdx + 1) % n
+        else this.selIdx = this.selIdx <= 0 ? n - 1 : this.selIdx - 1
+      } else if (e.key === 'Enter') {
+        if (this.open && this.selIdx >= 0) {
+          e.preventDefault()
+          this.accept(this.displayItems[this.selIdx])
+        }
+        // else: dropdown closed or nothing selected — let the form submit.
+      } else if (e.key === 'Tab') {
+        if (this.open && this.selIdx >= 0) {
+          e.preventDefault()
+          this.accept(this.displayItems[this.selIdx])
+        }
+      } else if (e.key === 'Escape') {
+        this.open = false
+      }
+    },
+    accept(item) {
+      if (!item) return
+      let next
+      let cursor
+      if (item.replaceAll) {
+        next = item.insert
+        cursor = next.length
+      } else {
+        const start = this.ctx ? this.ctx.partialStart : this.modelValue.length
+        const end = this.cursorPos
+        next = this.modelValue.slice(0, start) + item.insert + this.modelValue.slice(end)
+        cursor = start + item.insert.length
+      }
+      this.$emit('update:modelValue', next)
+      this.selIdx = -1
+      this.$nextTick(() => {
+        const el = this.$refs.input
+        if (el) {
+          el.focus()
+          el.setSelectionRange(cursor, cursor)
+        }
+        // Re-evaluate at the new cursor so completions chain: accepting a
+        // label key (which inserts `key="`) immediately offers its values.
+        // Recalled history entries are complete queries — close instead.
+        if (item.replaceAll) this.open = false
+        else this.openDrop()
+      })
+    },
+  },
+  template: `
+    <form class="query-bar" @submit.prevent="$emit('run')">
+      <div class="qb-wrap">
+        <input
+          ref="input"
+          :id="lang + '-query'"
+          :name="lang + '-query'"
+          :value="modelValue"
+          @input="onInput"
+          @focus="openDrop"
+          @click="openDrop"
+          @keydown="onKeydown"
+          @blur="onBlur"
+          :placeholder="placeholder"
+          spellcheck="false"
+          autocapitalize="off"
+          autocomplete="off"
+        />
+        <div class="qb-drop" v-if="open && displayItems.length">
+          <div class="qb-group-label">{{ groupLabel }}</div>
+          <div
+            class="qb-item"
+            v-for="(it, i) in displayItems"
+            :key="i + it.text"
+            :class="{ sel: i === selIdx }"
+            @mousedown.prevent="accept(it)"
+            @mouseenter="selIdx = i"
+          >{{ it.text }}</div>
+        </div>
+      </div>
+      <button type="submit" :disabled="loading">Run</button>
+    </form>
+  `,
+}
+
 // Cross-signal pivot links for a service: one entry per signal it reports
 // (per vocab.services), each pre-filled so landing on the target tab needs no
 // further typing. The metrics link carries only `service` (pre-selects the
@@ -814,31 +1200,23 @@ const AiAsk = {
 const LOG_SEVERITIES = ['error', 'warn', 'info', 'debug']
 
 const Logs = {
-  components: { AiAsk },
+  components: { AiAsk, QueryBar },
   mixins: [routeAware('logs')],
   template: `
     <section class="view">
       <h2>Logs</h2>
-      <form class="query-bar" @submit.prevent="onSubmit">
-        <input
-          v-model="query"
-          name="logs-query"
-          id="logs-query"
-          list="logs-suggestions"
-          placeholder='{service="my-service"}'
-          spellcheck="false"
-          autocapitalize="off"
-        />
-        <button type="submit" :disabled="loading">Run</button>
-      </form>
+      <query-bar
+        v-model="query"
+        lang="logql"
+        :loading="loading"
+        placeholder='{service="my-service"}'
+        @run="onSubmit"
+      ></query-bar>
       <ai-ask :lang="'logql'" @query="onAi"></ai-ask>
       <div class="picker" v-if="chips.length">
         <span class="picker-label">Quick:</span>
         <button class="chip" v-for="c in chips" :key="c" @click="pick(c)">{{ c }}</button>
       </div>
-      <datalist id="logs-suggestions">
-        <option v-for="c in chips" :key="c" :value="c"></option>
-      </datalist>
       <p v-if="error" class="error">{{ error }}</p>
       <pre class="err-caret" v-if="errorCaret">{{ errorCaret.query }}
 {{ errorCaret.caret }}</pre>
@@ -988,6 +1366,7 @@ const Logs = {
         }
         rows.sort((a, b) => b.tsNs - a.tsNs)
         this.rows = rows
+        window.__aniani.recordHistory('logql', this.query)
       } catch (e) {
         this.error = e.message
         this.errorHint = e.hint || ''
@@ -1284,23 +1663,19 @@ const LineChart = {
 }
 
 const Metrics = {
-  components: { AiAsk, LineChart },
+  components: { AiAsk, LineChart, QueryBar },
   mixins: [routeAware('metrics')],
   template: `
     <section class="view">
       <h2>Metrics</h2>
-      <form class="query-bar" @submit.prevent="run">
-        <input
-          v-model="query"
-          name="metrics-query"
-          id="metrics-query"
-          list="metric-names"
-          placeholder="rate(http_requests_total[5m])"
-          spellcheck="false"
-          autocapitalize="off"
-        />
-        <button type="submit" :disabled="loading">Run</button>
-      </form>
+      <query-bar
+        v-model="query"
+        lang="promql"
+        :loading="loading"
+        :metric-names="chips"
+        placeholder="rate(http_requests_total[5m])"
+        @run="run"
+      ></query-bar>
       <ai-ask :lang="'promql'" @query="onAi"></ai-ask>
       <div class="picker" v-if="metricServices.length">
         <span class="picker-label">Service:</span>
@@ -1313,9 +1688,6 @@ const Metrics = {
         <span class="picker-label">Metrics:</span>
         <button class="chip" v-for="c in chips" :key="c" @click="pick(c)">{{ c }}</button>
       </div>
-      <datalist id="metric-names">
-        <option v-for="c in chips" :key="c" :value="c"></option>
-      </datalist>
       <p v-if="error" class="error">{{ error }}</p>
       <p v-if="loading" class="muted">Loading…</p>
       <line-chart v-if="matrix.length" :result="matrix"></line-chart>
@@ -1396,6 +1768,7 @@ const Metrics = {
             return { series: this.seriesLabel(s.metric || {}), value }
           })
         }
+        window.__aniani.recordHistory('promql', this.query)
       } catch (e) {
         this.error = e.message
       } finally {
@@ -1405,31 +1778,23 @@ const Metrics = {
   },
 }
 const Traces = {
-  components: { AiAsk, TraceView },
+  components: { AiAsk, TraceView, QueryBar },
   mixins: [routeAware('traces')],
   template: `
     <section class="view">
       <h2>Traces</h2>
-      <form class="query-bar" @submit.prevent="run">
-        <input
-          v-model="query"
-          name="traces-query"
-          id="traces-query"
-          list="traces-suggestions"
-          placeholder='{ resource.service.name = "my-service" }'
-          spellcheck="false"
-          autocapitalize="off"
-        />
-        <button type="submit" :disabled="loading">Run</button>
-      </form>
+      <query-bar
+        v-model="query"
+        lang="traceql"
+        :loading="loading"
+        placeholder='{ resource.service.name = "my-service" }'
+        @run="run"
+      ></query-bar>
       <ai-ask :lang="'traceql'" @query="onAi"></ai-ask>
       <div class="picker" v-if="chips.length">
         <span class="picker-label">Quick:</span>
         <button class="chip" v-for="c in chips" :key="c" @click="pick(c)">{{ c }}</button>
       </div>
-      <datalist id="traces-suggestions">
-        <option v-for="c in chips" :key="c" :value="c"></option>
-      </datalist>
       <p v-if="error" class="error">{{ error }}</p>
       <p v-if="loading" class="muted">Loading…</p>
       <p v-if="!traces.length && ran && !loading && !error && !selectedId" class="muted">No traces matched.</p>
@@ -1550,6 +1915,7 @@ const Traces = {
           '&start=' + startSec + '&end=' + endSec + '&limit=20'
         const res = await window.__aniani.apiGet(url)
         this.traces = res.traces || []
+        window.__aniani.recordHistory('traceql', this.query)
       } catch (e) {
         this.error = e.message
       } finally {
@@ -1749,7 +2115,7 @@ const App = {
 // Export the shared helpers so later tasks can reference them within this file.
 window.__aniani = {
   apiGet, formatLocalTime, escLabel, vocab, loadVocab, loadCatalog, route, href, setParams,
-  rangeStartMs, timeRange, customWindow,
+  rangeStartMs, timeRange, customWindow, recordHistory,
   activeRerun: null,
   clearExplicitWindow: null,
   activeQueryInput: null,
