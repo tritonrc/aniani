@@ -34,6 +34,9 @@ enum PreparedAttributeValue {
     Bool(bool),
 }
 
+/// Prepared (pre-intern) attribute pairs.
+type PreparedAttrs = SmallVec<[(String, PreparedAttributeValue); 8]>;
+
 #[derive(Debug, Clone)]
 struct PreparedEvent {
     name: String,
@@ -107,7 +110,10 @@ pub async fn traces_handler(
 /// Transport-agnostic: shared by the OTLP/HTTP handler and the OTLP/gRPC
 /// service. Returns accepted trace/span counts.
 pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> TracesAccepted {
-    let mut prepared_batches: Vec<Vec<PreparedSpan>> = Vec::new();
+    // Each batch pairs one resource group's prepared resource attributes with
+    // its spans. Resource attributes are prepared once per group (not cloned
+    // per span) and interned once under the write lock.
+    let mut prepared_batches: Vec<(PreparedAttrs, Vec<PreparedSpan>)> = Vec::new();
     let mut trace_ids = FxHashSet::default();
     let mut total_spans: usize = 0;
 
@@ -119,7 +125,7 @@ pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> Tr
             .map(|(_, v)| v.clone())
             .unwrap_or_else(|| "unknown".to_string());
 
-        let resource_attrs: SmallVec<[(String, PreparedAttributeValue); 8]> = resource_labels
+        let resource_attrs: PreparedAttrs = resource_labels
             .iter()
             .map(|(k, v)| {
                 let key = format!("resource.{}", k);
@@ -128,9 +134,8 @@ pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> Tr
             })
             .collect();
 
+        let mut spans = Vec::new();
         for scope_spans in &resource_spans.scope_spans {
-            let mut spans = Vec::with_capacity(scope_spans.spans.len());
-
             for otlp_span in &scope_spans.spans {
                 let trace_id: [u8; 16] = match otlp_span.trace_id.as_slice().try_into() {
                     Ok(id) if id != [0u8; 16] => id,
@@ -175,15 +180,16 @@ pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> Tr
                 let duration_ns = end_time_ns.saturating_sub(start_time_ns);
                 let kind = SpanKind::from_otlp(otlp_span.kind);
 
-                let mut attributes = resource_attrs.clone();
-
-                // Add span attributes
+                // Span-specific attributes only; resource attributes are added
+                // once per resource group under the write lock.
+                let mut attributes: SmallVec<[(String, PreparedAttributeValue); 8]> =
+                    SmallVec::new();
                 for attr in &otlp_span.attributes {
-                    if let Some(val) = &attr.value {
+                    if let Some(val) = &attr.value
+                        && let Some(av) = convert_any_value(val)
+                    {
                         let key = format!("span.{}", attr.key);
-                        if let Some(av) = convert_any_value(val) {
-                            attributes.push((key, av));
-                        }
+                        attributes.push((key, av));
                     }
                 }
 
@@ -226,17 +232,22 @@ pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> Tr
                     ingest_seq: state.ingest_seq.fetch_add(1, Ordering::Relaxed),
                 });
             }
-
-            total_spans += spans.len();
-            prepared_batches.push(spans);
         }
+
+        total_spans += spans.len();
+        prepared_batches.push((resource_attrs, spans));
     }
 
     let mut store = state.trace_store.write();
-    for prepared_batch in prepared_batches {
+    for (resource_attrs, prepared_batch) in prepared_batches {
+        // Intern resource attributes once for the whole batch.
+        let resource_spurs: SmallVec<[(lasso::Spur, AttributeValue); 8]> = resource_attrs
+            .into_iter()
+            .map(|(key, value)| intern_attribute(&mut store, key, value))
+            .collect();
         let spans: Vec<Span> = prepared_batch
             .into_iter()
-            .map(|prepared| intern_prepared_span(&mut store, prepared))
+            .map(|prepared| intern_prepared_span(&mut store, prepared, &resource_spurs))
             .collect();
         store.ingest_spans(spans);
     }
@@ -259,14 +270,23 @@ fn convert_any_value(
     }
 }
 
-fn intern_prepared_span(store: &mut crate::store::TraceStore, prepared: PreparedSpan) -> Span {
+fn intern_prepared_span(
+    store: &mut crate::store::TraceStore,
+    prepared: PreparedSpan,
+    resource_spurs: &SmallVec<[(lasso::Spur, AttributeValue); 8]>,
+) -> Span {
     let name = store.interner.get_or_intern(&prepared.name);
     let service_name = store.interner.get_or_intern(&prepared.service_name);
-    let attributes = prepared
-        .attributes
-        .into_iter()
-        .map(|(key, value)| intern_attribute(store, key, value))
-        .collect();
+    // Resource attributes (interned once per resource group) are prepended; the
+    // per-span clone is cheap Spur pairs (no String allocation). Span-specific
+    // attributes are interned here.
+    let mut attributes = resource_spurs.clone();
+    attributes.extend(
+        prepared
+            .attributes
+            .into_iter()
+            .map(|(key, value)| intern_attribute(store, key, value)),
+    );
 
     let events = prepared
         .events
