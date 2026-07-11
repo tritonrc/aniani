@@ -37,6 +37,16 @@ function formatLocalTime(tsNs) {
   return pad(d.getHours(), 2) + ':' + pad(d.getMinutes(), 2) + ':' + pad(d.getSeconds(), 2) + '.' + pad(d.getMilliseconds(), 3)
 }
 
+// Relative-time label from a nanosecond timestamp (string or number): '12s ago',
+// '3m ago', '1h ago'. Rounded to the nearest unit; never negative.
+function agoLabel(startNs) {
+  const diffSec = (Date.now() * 1e6 - Number(startNs)) / 1e9
+  const s = Math.max(0, Math.round(diffSec))
+  if (s < 60) return s + 's ago'
+  if (s < 3600) return Math.round(s / 60) + 'm ago'
+  return Math.round(s / 3600) + 'h ago'
+}
+
 // --- hash-router helpers ---------------------------------------------------
 
 // '#/logs?q=%7B...%7D' -> { tab: 'logs', params: { q: '{...}' } }
@@ -360,6 +370,16 @@ const TraceView = {
     otherEvents(span) {
       return span.events.filter((ev) => !isException(ev))
     },
+    href,
+    signalLinks,
+    // href('logs', ...) for the span's service, windowed 30s before/after the
+    // span so the correlated log lines are in view without an extra search.
+    // startBig/endBig are BigInt; do the arithmetic in BigInt then String() it.
+    viewLogsHref(span) {
+      const start = span.startBig - 30_000_000_000n
+      const end = span.endBig + 30_000_000_000n
+      return href('logs', { q: '{service="' + escLabel(span.service) + '"}', start: String(start), end: String(end) })
+    },
   },
   template: `
     <div class="trace-view" v-if="model">
@@ -408,8 +428,15 @@ const TraceView = {
             </div>
             <div class="tl-detail" v-if="expanded[row.span.uid]">
               <div class="tl-meta">
-                <div><span class="k">Service</span><span class="v">{{ row.span.service }}</span></div>
+                <div>
+                  <span class="k">Service</span>
+                  <span class="v pivot-links">
+                    {{ row.span.service }}
+                    <a v-for="l in signalLinks(row.span.service)" :key="l.label" :href="l.href">{{ l.label }}</a>
+                  </span>
+                </div>
                 <div><span class="k">Operation</span><span class="v">{{ row.span.name }}</span></div>
+                <div><span class="k">Logs</span><span class="v"><a :href="viewLogsHref(row.span)" class="pivot-link">View logs (±30s)</a></span></div>
                 <div><span class="k">Kind</span><span class="v">{{ kindLabel(row.span.kind) }}</span></div>
                 <div><span class="k">Status</span><span class="v" :class="statusClass(row.span.statusCode)">{{ statusLabel(row.span.statusCode) }}</span></div>
                 <div><span class="k">Duration</span><span class="v">{{ formatDuration(row.span.durationNs) }}</span></div>
@@ -480,6 +507,26 @@ async function loadCatalog(service) {
   } catch (_) { return null }
 }
 
+// Cross-signal pivot links for a service: one entry per signal it reports
+// (per vocab.services), each pre-filled so landing on the target tab needs no
+// further typing. The metrics link carries only `service` (pre-selects the
+// dropdown and loads its catalog chips) since there's no single query to run.
+function signalLinks(service) {
+  const entry = (vocab.services || []).find((s) => s.name === service)
+  const signals = (entry && entry.signals) || []
+  const links = []
+  if (signals.includes('logs')) {
+    links.push({ label: 'logs', href: href('logs', { q: '{service="' + escLabel(service) + '"}' }) })
+  }
+  if (signals.includes('metrics')) {
+    links.push({ label: 'metrics', href: href('metrics', { service }) })
+  }
+  if (signals.includes('traces')) {
+    links.push({ label: 'traces', href: href('traces', { q: '{ resource.service.name = "' + escLabel(service) + '" }' }) })
+  }
+  return links
+}
+
 const Landing = {
   template: `
     <section class="view">
@@ -490,6 +537,9 @@ const Landing = {
         <li v-for="s in services" :key="s.name">
           <strong>{{ s.name }}</strong>
           <span class="signals">{{ (s.signals || []).join(', ') }}</span>
+          <span class="signal-links">
+            <a v-for="l in signalLinks(s.name)" :key="l.label" :href="l.href">{{ l.label }}</a>
+          </span>
         </li>
       </ul>
       <p v-else-if="!error" class="muted">No services have reported telemetry yet.</p>
@@ -504,6 +554,7 @@ const Landing = {
     pretty(v) {
       return JSON.stringify(v, null, 2)
     },
+    signalLinks,
   },
   async mounted() {
     // Load services and status independently so one failing doesn't blank the other.
@@ -682,8 +733,12 @@ const Logs = {
           <button v-if="isClamped(r.line)" class="show-more-btn" @click="toggleExpand(i)">
             {{ expandedRows[i] ? 'show less' : 'show more' }}
           </button>
-          <div class="log-line2" v-if="r.labels.length">
-            <span class="lbl-chip" v-for="(pair, j) in r.labels" :key="j">[{{ pair[0] }}={{ pair[1] }}]</span>
+          <div class="log-line2" v-if="r.labels.length || r.traceId">
+            <template v-for="(pair, j) in r.labels" :key="j">
+              <a v-if="pair[0] === 'service'" class="lbl-chip lbl-chip-link" :href="serviceLogsHref(pair[1])">[{{ pair[0] }}={{ pair[1] }}]</a>
+              <span v-else class="lbl-chip">[{{ pair[0] }}={{ pair[1] }}]</span>
+            </template>
+            <a v-if="r.traceId" class="lbl-chip trace-chip" :href="traceHref(r.traceId)">trace ⧉</a>
           </div>
         </div>
       </div>
@@ -757,6 +812,13 @@ const Logs = {
     },
     toggleExpand(i) {
       this.expandedRows[i] = !this.expandedRows[i]
+    },
+    href,
+    serviceLogsHref(service) {
+      return href('logs', { q: '{service="' + escLabel(service) + '"}' })
+    },
+    traceHref(traceId) {
+      return href('traces', { trace: traceId })
     },
     async run() {
       this.error = ''
@@ -954,25 +1016,41 @@ const Traces = {
       </datalist>
       <p v-if="error" class="error">{{ error }}</p>
       <p v-if="loading" class="muted">Loading…</p>
-      <p v-if="!traces.length && ran && !loading && !error" class="muted">No traces matched.</p>
-      <div class="traces-layout" v-if="traces.length">
-        <ul class="tr-list">
-          <li
-            v-for="t in traces"
-            :key="t.traceID"
-            :class="{ active: t.traceID === selectedId }"
-            @click="open(t.traceID)"
-          >
-            <div class="tr-item-head">
-              <span class="tr-item-name">{{ t.rootTraceName || t.rootServiceName }}</span>
-              <span class="tr-item-dur">{{ t.durationMs }}ms</span>
-            </div>
-            <div class="tr-item-sub">
-              <span class="tr-item-svc">{{ t.rootServiceName }}</span>
-              <span class="mono">{{ shortId(t.traceID) }}</span>
-            </div>
-          </li>
-        </ul>
+      <p v-if="!traces.length && ran && !loading && !error && !selectedId" class="muted">No traces matched.</p>
+      <div class="traces-layout" v-if="traces.length || selectedId">
+        <div class="tr-list-col" v-if="traces.length">
+          <div class="tr-sort">
+            <span class="picker-label">Sort:</span>
+            <button
+              v-for="m in sortModes"
+              :key="m"
+              class="tv-btn"
+              :class="{ active: sortMode === m }"
+              @click="sortMode = m"
+            >{{ m }}</button>
+          </div>
+          <ul class="tr-list">
+            <li
+              v-for="t in sortedTraces"
+              :key="t.traceID"
+              :class="{ active: t.traceID === selectedId }"
+              @click="open(t.traceID)"
+            >
+              <div class="tr-item-head">
+                <span class="tr-item-name">{{ t.rootTraceName || t.rootServiceName }}</span>
+                <span class="tr-item-dur">{{ t.durationMs }}ms</span>
+              </div>
+              <div class="tr-item-sub">
+                <span class="tr-item-svc">{{ t.rootServiceName }}</span>
+                <span class="mono">{{ shortId(t.traceID) }}</span>
+              </div>
+              <div class="tr-item-meta">
+                <span class="tr-badge-err" v-if="t.errorCount > 0">{{ t.errorCount }} errors</span>
+                <span class="tr-item-ago">{{ agoLabel(t.startTimeUnixNano) }}</span>
+              </div>
+            </li>
+          </ul>
+        </div>
         <div class="traces-detail">
           <div v-if="selectedId" class="detail">
             <h3 class="mono">Trace {{ selectedId }}</h3>
@@ -995,7 +1073,9 @@ const Traces = {
       selected: null,
       selectedId: '',
       detailError: '',
-      routeTraceId: '', // set by applyRoute; consumed by a later task
+      routeTraceId: '', // set by applyRoute; consumed by open() below
+      sortMode: 'recent',
+      sortModes: ['recent', 'slowest', 'errors'],
     }
   },
   computed: {
@@ -1004,12 +1084,32 @@ const Traces = {
         .filter((s) => (s.signals || []).includes('traces'))
         .map((s) => '{ resource.service.name = "' + window.__aniani.escLabel(s.name) + '" }')
     },
+    // Client-side sort of the search results; never mutates `traces` itself.
+    // Start times are big nanosecond strings — compare as BigInt so ordering
+    // stays correct past Number's safe integer range.
+    sortedTraces() {
+      const cmpStartDesc = (a, b) => {
+        const d = BigInt(b.startTimeUnixNano) - BigInt(a.startTimeUnixNano)
+        return d > 0n ? 1 : d < 0n ? -1 : 0
+      }
+      const arr = [...this.traces]
+      if (this.sortMode === 'slowest') {
+        arr.sort((a, b) => b.durationMs - a.durationMs)
+      } else if (this.sortMode === 'errors') {
+        arr.sort((a, b) => b.errorCount - a.errorCount || cmpStartDesc(a, b))
+      } else {
+        arr.sort(cmpStartDesc)
+      }
+      return arr
+    },
   },
   methods: {
+    agoLabel,
     applyRoute(params) {
       this.query = params.q || this.query
       this.routeTraceId = params.trace || this.routeTraceId
       if (params.q && params.q !== this.lastRunQuery) this.run()
+      if (params.trace && params.trace !== this.selectedId) this.open(params.trace)
     },
     onAi(q) { this.query = q; this.run() },
     pick(c) { this.query = c; this.run() },
@@ -1041,6 +1141,7 @@ const Traces = {
       this.detailError = ''
       this.selectedId = id
       this.selected = null
+      window.__aniani.setParams({ q: this.query, trace: id })
       try {
         const data = await window.__aniani.apiGet('/api/traces/' + encodeURIComponent(id))
         if (this.selectedId === id) this.selected = data // ignore stale responses
