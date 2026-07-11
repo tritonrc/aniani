@@ -25,9 +25,31 @@ async function apiGet(url) {
   return json
 }
 
-// last-hour time window helpers
-function hourAgoMs() {
-  return Date.now() - 3600 * 1000
+// --- shared time-range state ------------------------------------------------
+// Preset window (used by Logs/Metrics/Traces queries) and auto-refresh mode,
+// shared across views via the App header control.
+const RANGE_PRESETS = { '5m': 300, '15m': 900, '1h': 3600, '2h': 7200 }
+const timeRange = reactive({ preset: '1h', refresh: 'off' })
+
+function rangeToSec() {
+  return RANGE_PRESETS[timeRange.preset] || 3600
+}
+function rangeStartMs() {
+  return Date.now() - rangeToSec() * 1000
+}
+
+// True when a view is showing an explicit start/end window (currently only
+// Logs, via the span → logs pivot) instead of the timeRange preset; drives
+// the 'custom' chip in App's range control.
+const customWindow = reactive({ active: false })
+
+// Sync timeRange.preset from a hash `range` param, when present and known.
+// Called by routeAware before a view's own applyRoute runs, so the header
+// control reflects the URL on every route change.
+function applyRangeParam(params) {
+  if (params && params.range && RANGE_PRESETS[params.range]) {
+    timeRange.preset = params.range
+  }
 }
 
 // HH:MM:SS.mmm in local time, from a nanosecond timestamp (as Number).
@@ -847,15 +869,17 @@ const Logs = {
       this.query = params.q || this.query
       this.rangeStart = params.start || ''
       this.rangeEnd = params.end || ''
+      customWindow.active = !!(this.rangeStart && this.rangeEnd)
       if (params.q && params.q !== this.lastRunQuery) this.run()
     },
     onAi(q) { this.query = q; this.run() },
     pick(c) { this.query = c; this.run() },
-    // Manual Run clears any explicit route-supplied window, reverting to
-    // "last hour". Chips and AI-ask call run() directly and keep it.
+    // Manual Run clears any explicit route-supplied window, reverting to the
+    // timeRange preset. Chips and AI-ask call run() directly and keep it.
     onSubmit() {
       this.rangeStart = ''
       this.rangeEnd = ''
+      customWindow.active = false
       this.run()
     },
     loadMore() {
@@ -891,14 +915,15 @@ const Logs = {
       this.rows = []
       this.expandedRows = {}
       this.lastRunQuery = this.query
-      const params = { q: this.query }
+      const rt = window.__aniani.timeRange
+      const params = { q: this.query, range: rt.preset === '1h' ? '' : rt.preset }
       if (this.rangeStart && this.rangeEnd) {
         params.start = this.rangeStart
         params.end = this.rangeEnd
       }
       window.__aniani.setParams(params)
       try {
-        const startNs = this.rangeStart || String(window.__aniani.hourAgoMs() * 1_000_000)
+        const startNs = this.rangeStart || String(window.__aniani.rangeStartMs() * 1_000_000)
         const endNs = this.rangeEnd || String(Date.now() * 1_000_000)
         const url =
           '/loki/api/v1/query_range?query=' +
@@ -930,6 +955,18 @@ const Logs = {
         this.loading = false
       }
     },
+  },
+  activated() {
+    // Only Logs has an explicit start/end window; register the clear
+    // callback so App's range control can drop it when a preset is clicked.
+    window.__aniani.clearExplicitWindow = () => {
+      this.rangeStart = ''
+      this.rangeEnd = ''
+      customWindow.active = false
+    }
+  },
+  deactivated() {
+    window.__aniani.clearExplicitWindow = null
   },
 }
 // Build a `name{k="v", ...}` label for a PromQL result's `metric` object.
@@ -1289,10 +1326,11 @@ const Metrics = {
       this.rows = []
       this.matrix = []
       this.lastRunQuery = this.query
-      window.__aniani.setParams({ q: this.query })
+      const rt = window.__aniani.timeRange
+      window.__aniani.setParams({ q: this.query, service: this.service || '', range: rt.preset === '1h' ? '' : rt.preset })
       try {
         const endSec = Math.floor(Date.now() / 1000)
-        const startSec = Math.floor(window.__aniani.hourAgoMs() / 1000)
+        const startSec = Math.floor(window.__aniani.rangeStartMs() / 1000)
         const url =
           '/api/v1/query_range?query=' +
           encodeURIComponent(this.query) +
@@ -1460,10 +1498,14 @@ const Traces = {
       this.selectedId = ''
       this.detailError = ''
       this.lastRunQuery = this.query
-      window.__aniani.setParams({ q: this.query })
+      const rt = window.__aniani.timeRange
+      window.__aniani.setParams({ q: this.query, range: rt.preset === '1h' ? '' : rt.preset })
       try {
+        const endSec = Math.floor(Date.now() / 1000)
+        const startSec = Math.floor(window.__aniani.rangeStartMs() / 1000)
         const url =
-          '/api/search?q=' + encodeURIComponent(this.query) + '&limit=20'
+          '/api/search?q=' + encodeURIComponent(this.query) +
+          '&start=' + startSec + '&end=' + endSec + '&limit=20'
         const res = await window.__aniani.apiGet(url)
         this.traces = res.traces || []
       } catch (e) {
@@ -1476,7 +1518,8 @@ const Traces = {
       this.detailError = ''
       this.selectedId = id
       this.selected = null
-      window.__aniani.setParams({ q: this.query, trace: id })
+      const rt = window.__aniani.timeRange
+      window.__aniani.setParams({ q: this.query, trace: id, range: rt.preset === '1h' ? '' : rt.preset })
       try {
         const data = await window.__aniani.apiGet('/api/traces/' + encodeURIComponent(id))
         if (this.selectedId === id) this.selected = data // ignore stale responses
@@ -1514,7 +1557,10 @@ function setParams(params) {
 window.addEventListener('hashchange', syncFromLocation)
 
 // Mixin factory: wires a view's applyRoute(params) to first mount, keep-alive
-// reactivation, and hash changes while `tabId` is the active tab.
+// reactivation, and hash changes while `tabId` is the active tab. Also owns
+// the generic half of the auto-refresh contract: registers this view's run()
+// as window.__aniani.activeRerun while it's the active (kept-alive) tab, so
+// App's refresh timer and range-preset clicks can re-run it.
 function routeAware(tabId) {
   return {
     data() {
@@ -1525,14 +1571,28 @@ function routeAware(tabId) {
     },
     watch: {
       routeSeq() {
-        if (route.tab === tabId) this.applyRoute(route.params)
+        if (route.tab === tabId) {
+          applyRangeParam(route.params)
+          this.applyRoute(route.params)
+        }
       },
     },
     mounted() {
-      if (route.tab === tabId) this.applyRoute(route.params)
+      if (route.tab === tabId) {
+        applyRangeParam(route.params)
+        this.applyRoute(route.params)
+      }
     },
     activated() {
-      if (route.tab === tabId) this.applyRoute(route.params)
+      if (route.tab === tabId) {
+        applyRangeParam(route.params)
+        this.applyRoute(route.params)
+      }
+      this._rerun = () => { if (this.query) this.run() }
+      window.__aniani.activeRerun = this._rerun
+    },
+    deactivated() {
+      if (window.__aniani.activeRerun === this._rerun) window.__aniani.activeRerun = null
     },
   }
 }
@@ -1550,6 +1610,27 @@ const App = {
             :href="href(t.id, {})"
             :class="{ active: route.tab === t.id }"
           >{{ t.label }}</a>
+          <div class="range-ctl" v-if="route.tab !== 'home'">
+            <span class="range-group">
+              <button
+                v-for="p in rangePresets"
+                :key="p"
+                class="range-btn"
+                :class="{ active: !customWindow.active && timeRange.preset === p }"
+                @click="pickRange(p)"
+              >{{ p }}</button>
+              <button v-if="customWindow.active" class="range-btn active" disabled>custom</button>
+            </span>
+            <span class="range-group">
+              <button
+                v-for="r in refreshOptions"
+                :key="r"
+                class="range-btn"
+                :class="{ active: timeRange.refresh === r }"
+                @click="timeRange.refresh = r"
+              >{{ r }}</button>
+            </span>
+          </div>
         </nav>
       </header>
       <main>
@@ -1568,6 +1649,9 @@ const App = {
         { id: 'metrics', label: 'Metrics', comp: 'Metrics' },
         { id: 'traces', label: 'Traces', comp: 'Traces' },
       ],
+      rangePresets: Object.keys(RANGE_PRESETS),
+      refreshOptions: ['off', '5s', '30s'],
+      refreshTimer: null,
     }
   },
   computed: {
@@ -1575,12 +1659,56 @@ const App = {
       const t = this.tabs.find((x) => x.id === this.route.tab)
       return t ? t.comp : 'Landing'
     },
+    // Computed indirection onto the module-scope reactive singletons: exposes
+    // them to the template, and gives the refresh-mode watcher below a
+    // reactive dependency it can see (a plain string-path watch can't reach
+    // outside component data).
+    timeRange() { return timeRange },
+    customWindow() { return customWindow },
+    refreshMode() { return timeRange.refresh },
   },
-  methods: { href },
+  watch: {
+    refreshMode() {
+      this.resetRefreshTimer()
+    },
+  },
+  methods: {
+    href,
+    pickRange(p) {
+      timeRange.preset = p
+      customWindow.active = false
+      if (window.__aniani.clearExplicitWindow) window.__aniani.clearExplicitWindow()
+      if (window.__aniani.activeRerun) window.__aniani.activeRerun()
+    },
+    // Clears any existing interval before (maybe) creating a new one, so a
+    // refresh-mode change never leaves a stale interval running alongside it.
+    resetRefreshTimer() {
+      if (this.refreshTimer) {
+        clearInterval(this.refreshTimer)
+        this.refreshTimer = null
+      }
+      const ms = { '5s': 5000, '30s': 30000 }[timeRange.refresh]
+      if (!ms) return
+      this.refreshTimer = setInterval(() => {
+        if (!document.hidden && window.__aniani.activeRerun) window.__aniani.activeRerun()
+      }, ms)
+    },
+  },
+  mounted() {
+    this.resetRefreshTimer()
+  },
+  beforeUnmount() {
+    if (this.refreshTimer) clearInterval(this.refreshTimer)
+  },
 }
 
 // Export the shared helpers so later tasks can reference them within this file.
-window.__aniani = { apiGet, hourAgoMs, formatLocalTime, escLabel, vocab, loadVocab, loadCatalog, route, href, setParams }
+window.__aniani = {
+  apiGet, formatLocalTime, escLabel, vocab, loadVocab, loadCatalog, route, href, setParams,
+  rangeStartMs, rangeToSec, timeRange, customWindow,
+  activeRerun: null,
+  clearExplicitWindow: null,
+}
 
 loadVocab()
 syncFromLocation()

@@ -22,7 +22,7 @@ body {
 
 header h1 { margin: 16px 0 8px; font-size: 20px; }
 
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+.tabs { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--border); }
 .tabs button, .tabs a {
   background: none;
   border: none;
@@ -35,6 +35,21 @@ header h1 { margin: 16px 0 8px; font-size: 20px; }
 }
 .tabs button:hover, .tabs a:hover { color: var(--fg); }
 .tabs button.active, .tabs a.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.range-ctl { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.range-group { display: flex; gap: 2px; }
+.range-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 2px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.range-btn:hover { color: var(--fg); border-color: var(--accent); }
+.range-btn.active { color: var(--accent); border-color: var(--accent); }
+.range-btn:disabled { cursor: default; }
 
 .view { padding-top: 16px; }
 .view h2 { margin: 0 0 12px; font-size: 16px; }
