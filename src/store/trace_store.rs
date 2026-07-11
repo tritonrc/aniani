@@ -63,6 +63,10 @@ pub enum AttributeValue {
     Bool(bool),
 }
 
+/// (name, status, service) keys snapshot used during targeted index
+/// reconciliation after partial span removal.
+type SpanIndexKeys = Vec<(Spur, SpanStatus, Spur)>;
+
 /// A timestamped event recorded on a span.
 ///
 /// OTLP exceptions arrive as events named `exception` carrying
@@ -241,18 +245,26 @@ impl TraceStore {
     /// Evict spans older than the given timestamp.
     pub fn evict_before(&mut self, cutoff_ns: i64) {
         let mut empty_traces: Vec<[u8; 16]> = Vec::new();
-        let mut any_evicted = false;
+        // (trace_id, before-removal name/status/service keys) for traces that
+        // lost at least one span. Used for targeted index reconciliation.
+        let mut changed: Vec<([u8; 16], SpanIndexKeys)> = Vec::new();
 
         for (trace_id, spans) in &mut self.traces {
+            // Skip the snapshot unless at least one span is old enough to evict.
+            if !spans.iter().any(|s| s.start_time_ns < cutoff_ns) {
+                continue;
+            }
+            let before_keys: Vec<(Spur, SpanStatus, Spur)> = spans
+                .iter()
+                .map(|s| (s.name, s.status, s.service_name))
+                .collect();
             let before = spans.len();
             spans.retain(|s| s.start_time_ns >= cutoff_ns);
             let removed = before - spans.len();
-            if removed > 0 {
-                self.total_spans = self.total_spans.saturating_sub(removed);
-                any_evicted = true;
-                if spans.is_empty() {
-                    empty_traces.push(*trace_id);
-                }
+            self.total_spans = self.total_spans.saturating_sub(removed);
+            changed.push((*trace_id, before_keys));
+            if spans.is_empty() {
+                empty_traces.push(*trace_id);
             }
         }
 
@@ -260,27 +272,10 @@ impl TraceStore {
             self.traces.remove(trace_id);
         }
 
-        // Rebuild all indexes from surviving spans
-        if any_evicted {
-            self.service_index.clear();
-            self.name_index.clear();
-            self.status_index.clear();
-            for (trace_id, spans) in &self.traces {
-                for span in spans {
-                    self.service_index
-                        .entry(span.service_name)
-                        .or_default()
-                        .insert(*trace_id);
-                    self.name_index
-                        .entry(span.name)
-                        .or_default()
-                        .insert(*trace_id);
-                    self.status_index
-                        .entry(span.status)
-                        .or_default()
-                        .insert(*trace_id);
-                }
-            }
+        // Reconcile only the affected traces' index contributions instead of
+        // rebuilding all indexes from every surviving span.
+        for (trace_id, before_keys) in changed {
+            self.reconcile_trace_indexes(trace_id, &before_keys);
         }
     }
 
@@ -352,6 +347,10 @@ impl TraceStore {
 
         for trace_id in &trace_ids {
             if let Some(spans) = self.traces.get_mut(trace_id) {
+                let before_keys: Vec<(Spur, SpanStatus, Spur)> = spans
+                    .iter()
+                    .map(|s| (s.name, s.status, s.service_name))
+                    .collect();
                 let before = spans.len();
                 spans.retain(|s| s.service_name != service_spur);
                 let removed = before - spans.len();
@@ -360,27 +359,50 @@ impl TraceStore {
                 if spans.is_empty() {
                     self.traces.remove(trace_id);
                 }
+                self.reconcile_trace_indexes(*trace_id, &before_keys);
+            }
+        }
+    }
+
+    /// Reconcile a single trace's index contributions after its span set
+    /// changed. `before` holds the (name, status, service) keys the trace had
+    /// before removal; the surviving spans (if any) are read from `self.traces`.
+    /// Only index entries no longer represented by a surviving span are pruned,
+    /// so this is O(affected spans) rather than a full rebuild over all spans.
+    fn reconcile_trace_indexes(&mut self, trace_id: [u8; 16], before: &SpanIndexKeys) {
+        // Current surviving membership.
+        let mut sur_svc: FxHashSet<Spur> = FxHashSet::default();
+        let mut sur_name: FxHashSet<Spur> = FxHashSet::default();
+        let mut sur_status: FxHashSet<SpanStatus> = FxHashSet::default();
+        if let Some(spans) = self.traces.get(&trace_id) {
+            for span in spans {
+                sur_svc.insert(span.service_name);
+                sur_name.insert(span.name);
+                sur_status.insert(span.status);
             }
         }
 
-        // Rebuild all indexes from surviving spans
-        self.service_index.clear();
-        self.name_index.clear();
-        self.status_index.clear();
-        for (trace_id, spans) in &self.traces {
-            for span in spans {
-                self.service_index
-                    .entry(span.service_name)
-                    .or_default()
-                    .insert(*trace_id);
-                self.name_index
-                    .entry(span.name)
-                    .or_default()
-                    .insert(*trace_id);
-                self.status_index
-                    .entry(span.status)
-                    .or_default()
-                    .insert(*trace_id);
+        for &(name, status, svc) in before {
+            if !sur_name.contains(&name)
+                && let Some(set) = self.name_index.get_mut(&name)
+                && set.remove(&trace_id)
+                && set.is_empty()
+            {
+                self.name_index.remove(&name);
+            }
+            if !sur_status.contains(&status)
+                && let Some(set) = self.status_index.get_mut(&status)
+                && set.remove(&trace_id)
+                && set.is_empty()
+            {
+                self.status_index.remove(&status);
+            }
+            if !sur_svc.contains(&svc)
+                && let Some(set) = self.service_index.get_mut(&svc)
+                && set.remove(&trace_id)
+                && set.is_empty()
+            {
+                self.service_index.remove(&svc);
             }
         }
     }
