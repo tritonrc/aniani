@@ -177,7 +177,7 @@ async fn query_range_inner(
 
     let store = state.metric_store.read();
     match evaluate_range(&params.query, &store, start_ms, end_ms, step_ms) {
-        Ok(result) => (StatusCode::OK, Json(format_range_result(result))),
+        Ok(result) => (StatusCode::OK, Json(format_range_result(result, end_ms))),
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(
@@ -361,14 +361,14 @@ fn format_promql_result(result: PromQLResult, time_ms: i64) -> Value {
     }
 }
 
-fn format_range_result(result: PromQLResult) -> Value {
+fn format_range_result(result: PromQLResult, end_ms: i64) -> Value {
     match result {
         PromQLResult::Scalar(v) => {
             json!({
                 "status": "success",
                 "data": {
                     "resultType": "scalar",
-                    "result": [0, v.to_string()],
+                    "result": [end_ms as f64 / 1000.0, v.to_string()],
                 }
             })
         }
@@ -467,6 +467,18 @@ fn classify_to_ms(n: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_format_range_result_scalar_uses_end_timestamp() {
+        // A scalar in a range query must carry the evaluation timestamp
+        // (end_ms), not a hardcoded 0.
+        let end_ms = 1_700_000_000_000i64;
+        let v = format_range_result(PromQLResult::Scalar(42.0), end_ms);
+        assert_eq!(v["data"]["resultType"], "scalar");
+        let ts = v["data"]["result"][0].as_f64().unwrap();
+        assert!((ts - (end_ms as f64 / 1000.0)).abs() < f64::EPSILON);
+        assert_ne!(ts, 0.0);
+    }
 
     #[test]
     fn test_max_query_steps_constant() {
