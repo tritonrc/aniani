@@ -3,6 +3,11 @@
 //! Supports span selectors with attribute matching, duration filters,
 //! logical operators, and structural operators.
 
+mod pipeline;
+
+#[cfg(test)]
+mod tests;
+
 use nom::{
     IResult, Parser,
     branch::alt,
@@ -132,7 +137,7 @@ pub fn parse_traceql(input: &str) -> Result<TraceQLExpr, TraceQLParseError> {
         Ok((remaining, expr)) => {
             // Try to parse pipeline stages from remaining input
             let remaining = remaining.trim();
-            let (remaining, stages) = parse_pipeline_stages(remaining);
+            let (remaining, stages) = pipeline::parse_pipeline_stages(remaining);
             let remaining = remaining.trim();
             if remaining.is_empty() {
                 if stages.is_empty() {
@@ -345,7 +350,7 @@ fn parse_attribute_condition(input: &str) -> IResult<&str, SpanCondition> {
     ))
 }
 
-fn parse_compare_op(input: &str) -> IResult<&str, CompareOp> {
+pub(super) fn parse_compare_op(input: &str) -> IResult<&str, CompareOp> {
     alt((
         map(tag(">="), |_| CompareOp::Gte),
         map(tag("<="), |_| CompareOp::Lte),
@@ -415,7 +420,7 @@ fn parse_quoted_string(input: &str) -> IResult<&str, String> {
     }
 }
 
-fn parse_duration_value(input: &str) -> IResult<&str, Duration> {
+pub(super) fn parse_duration_value(input: &str) -> IResult<&str, Duration> {
     let (input, num_str) = take_while1(|c: char| c.is_ascii_digit() || c == '.')(input)?;
     let (input, unit) = alt((tag("ms"), tag("s"), tag("m"), tag("h"))).parse_complete(input)?;
 
@@ -440,367 +445,4 @@ fn parse_duration_value(input: &str) -> IResult<&str, Duration> {
     let duration = Duration::from_secs_f64(secs);
 
     Ok((input, duration))
-}
-
-/// Parse zero or more pipeline stages from the remaining input after the base expression.
-/// Each stage is `| count() op value` or `| avg/max/min(duration) op duration_value`.
-fn parse_pipeline_stages(mut input: &str) -> (&str, Vec<PipelineStage>) {
-    let mut stages = Vec::new();
-    loop {
-        let trimmed = input.trim_start();
-        if !trimmed.starts_with('|') {
-            break;
-        }
-        let rest = trimmed[1..].trim_start();
-        if let Ok((remaining, stage)) = parse_count_filter(rest) {
-            stages.push(stage);
-            input = remaining;
-        } else if let Ok((remaining, stage)) = parse_duration_agg_filter(rest) {
-            stages.push(stage);
-            input = remaining;
-        } else {
-            break;
-        }
-    }
-    (input, stages)
-}
-
-/// Parse `count() op value` where op is a comparison and value is a u64.
-fn parse_count_filter(input: &str) -> IResult<&str, PipelineStage> {
-    let (input, _) = tag("count()")(input)?;
-    let (input, _) = multispace0(input)?;
-    let (input, op) = parse_compare_op(input)?;
-    let (input, _) = multispace0(input)?;
-    let (input, num_str) = take_while1(|c: char| c.is_ascii_digit())(input)?;
-    let value: u64 = num_str.parse().map_err(|_| {
-        nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Digit))
-    })?;
-    Ok((input, PipelineStage::CountFilter { op, value }))
-}
-
-/// Parse `avg(duration) op duration`, `max(duration) op duration`, or `min(duration) op duration`.
-fn parse_duration_agg_filter(input: &str) -> IResult<&str, PipelineStage> {
-    let (input, agg_fn) = alt((tag("avg"), tag("max"), tag("min"))).parse_complete(input)?;
-    let (input, _) = tag("(duration)")(input)?;
-    let (input, _) = multispace0(input)?;
-    let (input, op) = parse_compare_op(input)?;
-    let (input, _) = multispace0(input)?;
-    let (input, dur) = parse_duration_value(input)?;
-    let value_ns = duration_to_i64_ns(dur).ok_or_else(|| {
-        nom::Err::Failure(nom::error::Error::new(
-            input,
-            nom::error::ErrorKind::TooLarge,
-        ))
-    })?;
-    let stage = match agg_fn {
-        "avg" => PipelineStage::AvgDuration { op, value_ns },
-        "max" => PipelineStage::MaxDuration { op, value_ns },
-        "min" => PipelineStage::MinDuration { op, value_ns },
-        _ => unreachable!(),
-    };
-    Ok((input, stage))
-}
-
-fn duration_to_i64_ns(duration: Duration) -> Option<i64> {
-    let ns = duration.as_nanos();
-    if ns > i64::MAX as u128 {
-        None
-    } else {
-        Some(ns as i64)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_simple_attribute_selector() {
-        let expr = parse_traceql(r#"{ resource.service.name = "payments" }"#).unwrap();
-        match expr {
-            TraceQLExpr::SpanSelector {
-                conditions,
-                logical_ops,
-            } => {
-                assert_eq!(conditions.len(), 1);
-                assert!(logical_ops.is_empty());
-                match &conditions[0] {
-                    SpanCondition::Attribute {
-                        scope,
-                        name,
-                        op,
-                        value,
-                    } => {
-                        assert_eq!(*scope, AttrScope::Resource);
-                        assert_eq!(name, "service.name");
-                        assert_eq!(*op, CompareOp::Eq);
-                        assert_eq!(*value, SpanValue::String("payments".into()));
-                    }
-                    _ => panic!("expected Attribute"),
-                }
-            }
-            _ => panic!("expected SpanSelector"),
-        }
-    }
-
-    #[test]
-    fn test_huge_duration_literal_returns_parse_error() {
-        let huge_duration_query = format!("{{ duration > {}h }}", "9".repeat(10_000));
-        assert!(parse_traceql(&huge_duration_query).is_err());
-        assert!(
-            parse_traceql("{ status = error } | avg(duration) > 9223372036854775808ms").is_err()
-        );
-    }
-
-    #[test]
-    fn test_name_selector() {
-        let expr = parse_traceql(r#"{ name = "POST /api/transfer" }"#).unwrap();
-        match expr {
-            TraceQLExpr::SpanSelector { conditions, .. } => match &conditions[0] {
-                SpanCondition::Name { op, value } => {
-                    assert_eq!(*op, CompareOp::Eq);
-                    assert_eq!(value, "POST /api/transfer");
-                }
-                _ => panic!("expected Name"),
-            },
-            _ => panic!("expected SpanSelector"),
-        }
-    }
-
-    #[test]
-    fn test_status_selector() {
-        let expr = parse_traceql(r#"{ status = error }"#).unwrap();
-        match expr {
-            TraceQLExpr::SpanSelector { conditions, .. } => match &conditions[0] {
-                SpanCondition::Status { op, value } => {
-                    assert_eq!(*op, CompareOp::Eq);
-                    assert_eq!(*value, SpanStatusValue::Error);
-                }
-                _ => panic!("expected Status"),
-            },
-            _ => panic!("expected SpanSelector"),
-        }
-    }
-
-    #[test]
-    fn test_duration_selector() {
-        let expr = parse_traceql(r#"{ duration > 500ms }"#).unwrap();
-        match expr {
-            TraceQLExpr::SpanSelector { conditions, .. } => match &conditions[0] {
-                SpanCondition::Duration { op, value } => {
-                    assert_eq!(*op, CompareOp::Gt);
-                    assert_eq!(*value, Duration::from_millis(500));
-                }
-                _ => panic!("expected Duration"),
-            },
-            _ => panic!("expected SpanSelector"),
-        }
-    }
-
-    #[test]
-    fn test_duration_seconds() {
-        let expr = parse_traceql(r#"{ duration > 1s }"#).unwrap();
-        match expr {
-            TraceQLExpr::SpanSelector { conditions, .. } => match &conditions[0] {
-                SpanCondition::Duration { op, value } => {
-                    assert_eq!(*op, CompareOp::Gt);
-                    assert_eq!(*value, Duration::from_secs(1));
-                }
-                _ => panic!("expected Duration"),
-            },
-            _ => panic!("expected SpanSelector"),
-        }
-    }
-
-    #[test]
-    fn test_and_conditions() {
-        let expr =
-            parse_traceql(r#"{ duration > 1s && resource.service.name = "payments" }"#).unwrap();
-        match expr {
-            TraceQLExpr::SpanSelector {
-                conditions,
-                logical_ops,
-            } => {
-                assert_eq!(conditions.len(), 2);
-                assert_eq!(logical_ops, vec![LogicalOp::And]);
-            }
-            _ => panic!("expected SpanSelector"),
-        }
-    }
-
-    #[test]
-    fn test_or_conditions() {
-        let expr = parse_traceql(r#"{ status = error || span.http.status_code >= 500 }"#).unwrap();
-        match expr {
-            TraceQLExpr::SpanSelector {
-                conditions,
-                logical_ops,
-            } => {
-                assert_eq!(conditions.len(), 2);
-                assert_eq!(logical_ops, vec![LogicalOp::Or]);
-            }
-            _ => panic!("expected SpanSelector"),
-        }
-    }
-
-    #[test]
-    fn test_structural_descendant() {
-        let expr = parse_traceql(
-            r#"{ resource.service.name = "api-gateway" } >> { resource.service.name = "payments" }"#,
-        )
-        .unwrap();
-        match expr {
-            TraceQLExpr::Structural { op, .. } => {
-                assert_eq!(op, StructuralOp::Descendant);
-            }
-            _ => panic!("expected Structural"),
-        }
-    }
-
-    #[test]
-    fn test_span_attribute_int() {
-        let expr = parse_traceql(r#"{ span.http.status_code = 500 }"#).unwrap();
-        match expr {
-            TraceQLExpr::SpanSelector { conditions, .. } => match &conditions[0] {
-                SpanCondition::Attribute { value, .. } => {
-                    assert_eq!(*value, SpanValue::Int(500));
-                }
-                _ => panic!("expected Attribute"),
-            },
-            _ => panic!("expected SpanSelector"),
-        }
-    }
-
-    #[test]
-    fn test_empty_selector() {
-        let expr = parse_traceql("{}").unwrap();
-        match expr {
-            TraceQLExpr::SpanSelector {
-                conditions,
-                logical_ops,
-            } => {
-                assert!(conditions.is_empty());
-                assert!(logical_ops.is_empty());
-            }
-            _ => panic!("expected SpanSelector"),
-        }
-    }
-
-    #[test]
-    fn test_empty_selector_with_spaces() {
-        let expr = parse_traceql("{  }").unwrap();
-        match expr {
-            TraceQLExpr::SpanSelector { conditions, .. } => {
-                assert!(conditions.is_empty());
-            }
-            _ => panic!("expected SpanSelector"),
-        }
-    }
-
-    #[test]
-    fn test_float_duration() {
-        let expr = parse_traceql(r#"{ duration > 2.5s }"#).unwrap();
-        match expr {
-            TraceQLExpr::SpanSelector { conditions, .. } => match &conditions[0] {
-                SpanCondition::Duration { value, .. } => {
-                    assert_eq!(*value, Duration::from_secs_f64(2.5));
-                }
-                _ => panic!("expected Duration"),
-            },
-            _ => panic!("expected SpanSelector"),
-        }
-    }
-
-    #[test]
-    fn test_count_filter_gt() {
-        let expr = parse_traceql(r#"{ status = error } | count() > 2"#).unwrap();
-        match expr {
-            TraceQLExpr::Pipeline {
-                inner,
-                pipeline_stages,
-            } => {
-                assert!(matches!(*inner, TraceQLExpr::SpanSelector { .. }));
-                assert_eq!(pipeline_stages.len(), 1);
-                assert_eq!(
-                    pipeline_stages[0],
-                    PipelineStage::CountFilter {
-                        op: CompareOp::Gt,
-                        value: 2
-                    }
-                );
-            }
-            _ => panic!("expected Pipeline"),
-        }
-    }
-
-    #[test]
-    fn test_count_filter_gte() {
-        let expr = parse_traceql(r#"{} | count() >= 3"#).unwrap();
-        match expr {
-            TraceQLExpr::Pipeline {
-                pipeline_stages, ..
-            } => {
-                assert_eq!(
-                    pipeline_stages[0],
-                    PipelineStage::CountFilter {
-                        op: CompareOp::Gte,
-                        value: 3
-                    }
-                );
-            }
-            _ => panic!("expected Pipeline"),
-        }
-    }
-
-    #[test]
-    fn test_count_filter_eq() {
-        let expr = parse_traceql(r#"{ status = ok } | count() = 1"#).unwrap();
-        match expr {
-            TraceQLExpr::Pipeline {
-                pipeline_stages, ..
-            } => {
-                assert_eq!(
-                    pipeline_stages[0],
-                    PipelineStage::CountFilter {
-                        op: CompareOp::Eq,
-                        value: 1
-                    }
-                );
-            }
-            _ => panic!("expected Pipeline"),
-        }
-    }
-
-    #[test]
-    fn test_trailing_and_is_parse_error() {
-        let result = parse_traceql("{ status = error && }");
-        assert!(result.is_err(), "trailing && should be a parse error");
-    }
-
-    #[test]
-    fn test_trailing_or_is_parse_error() {
-        let result = parse_traceql("{ status = error || }");
-        assert!(result.is_err(), "trailing || should be a parse error");
-    }
-
-    #[test]
-    fn test_status_with_unsupported_operator_is_parse_error() {
-        // Status is an unordered enum: ordering operators are meaningless and
-        // must be rejected rather than silently returning empty results.
-        for q in [
-            "{ status >= error }",
-            "{ status < ok }",
-            "{ status > unset }",
-            "{ status <= error }",
-        ] {
-            let result = parse_traceql(q);
-            assert!(result.is_err(), "expected parse error for: {}", q);
-        }
-    }
-
-    #[test]
-    fn test_status_neq_still_parses() {
-        let expr = parse_traceql("{ status != error }").unwrap();
-        assert!(matches!(expr, TraceQLExpr::SpanSelector { .. }));
-    }
 }
