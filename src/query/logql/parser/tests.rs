@@ -168,10 +168,7 @@ fn test_selector_trailing_garbage_keeps_current_message() {
     // pipeline-stage loop's Err::Failure propagation — must still error with
     // the offending text included.
     let msg = parse_logql(r#"{a="b"} xyz"#).unwrap_err().to_string();
-    assert!(
-        msg.contains("unexpected trailing input: xyz"),
-        "got: {msg}"
-    );
+    assert!(msg.contains("unexpected trailing input: xyz"), "got: {msg}");
 }
 
 #[test]

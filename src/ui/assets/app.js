@@ -38,6 +38,12 @@ function rangeStartMs() {
   return Date.now() - rangeToSec() * 1000
 }
 
+// Range value for the `range` URL param: the default '1h' preset is omitted
+// (implicit), everything else is passed through explicitly.
+function rangeParam() {
+  return timeRange.preset === '1h' ? '' : timeRange.preset
+}
+
 // True when a view is showing an explicit start/end window (currently only
 // Logs, via the span → logs pivot) instead of the timeRange preset; drives
 // the 'custom' chip in App's range control.
@@ -571,7 +577,7 @@ const Landing = {
       <h3>Status</h3>
       <p v-if="statusError" class="error">{{ statusError }}</p>
       <div class="tile-grid" v-if="tiles.length">
-        <div class="tile" v-for="t in tiles" :key="t.label">
+        <div class="tile" v-for="t in tiles" :key="t.label" :title="t.title">
           <div class="tile-label">{{ t.label }}</div>
           <div class="tile-value">{{ t.value }}</div>
         </div>
@@ -606,7 +612,13 @@ const Landing = {
         { label: 'Traces / Spans', value: d.totalTraces + ' / ' + d.totalSpans },
         { label: 'Series / Samples', value: d.totalMetricSeries + ' / ' + d.totalMetricSamples },
         { label: 'Log lines', value: String(d.totalLogEntries) },
-        { label: 'Memory', value: formatBytes(d.memoryBytes) },
+        {
+          label: 'Memory',
+          value: formatBytes(d.memoryBytes),
+          title: 'logs ' + formatBytes(d.logMemoryBytes) +
+            ' · metrics ' + formatBytes(d.metricMemoryBytes) +
+            ' · traces ' + formatBytes(d.traceMemoryBytes),
+        },
         { label: 'Uptime', value: formatUptime(d.uptimeSeconds) },
       ]
     },
@@ -870,7 +882,7 @@ const Logs = {
     // that produced the error (lastRunQuery), not the live input value.
     errorCaret() {
       if (!this.error) return null
-      const m = this.error.match(/position (\d+)/)
+      const m = this.error.match(/^parse error at position (\d+)/)
       if (!m) return null
       return { query: this.lastRunQuery, caret: ' '.repeat(parseInt(m[1], 10)) + '^' }
     },
@@ -926,8 +938,7 @@ const Logs = {
       this.rows = []
       this.expandedRows = {}
       this.lastRunQuery = this.query
-      const rt = window.__aniani.timeRange
-      const params = { q: this.query, range: rt.preset === '1h' ? '' : rt.preset }
+      const params = { q: this.query, range: rangeParam() }
       if (this.rangeStart && this.rangeEnd) {
         params.start = this.rangeStart
         params.end = this.rangeEnd
@@ -1339,8 +1350,7 @@ const Metrics = {
       this.rows = []
       this.matrix = []
       this.lastRunQuery = this.query
-      const rt = window.__aniani.timeRange
-      window.__aniani.setParams({ q: this.query, service: this.service || '', range: rt.preset === '1h' ? '' : rt.preset })
+      window.__aniani.setParams({ q: this.query, service: this.service || '', range: rangeParam() })
       try {
         const endSec = Math.floor(Date.now() / 1000)
         const startSec = Math.floor(window.__aniani.rangeStartMs() / 1000)
@@ -1513,8 +1523,7 @@ const Traces = {
       this.selectedId = ''
       this.detailError = ''
       this.lastRunQuery = this.query
-      const rt = window.__aniani.timeRange
-      window.__aniani.setParams({ q: this.query, range: rt.preset === '1h' ? '' : rt.preset })
+      window.__aniani.setParams({ q: this.query, range: rangeParam() })
       try {
         const endSec = Math.floor(Date.now() / 1000)
         const startSec = Math.floor(window.__aniani.rangeStartMs() / 1000)
@@ -1533,8 +1542,7 @@ const Traces = {
       this.detailError = ''
       this.selectedId = id
       this.selected = null
-      const rt = window.__aniani.timeRange
-      window.__aniani.setParams({ q: this.query, trace: id, range: rt.preset === '1h' ? '' : rt.preset })
+      window.__aniani.setParams({ q: this.query, trace: id, range: rangeParam() })
       try {
         const data = await window.__aniani.apiGet('/api/traces/' + encodeURIComponent(id))
         if (this.selectedId === id) this.selected = data // ignore stale responses
@@ -1723,7 +1731,7 @@ const App = {
 // Export the shared helpers so later tasks can reference them within this file.
 window.__aniani = {
   apiGet, formatLocalTime, escLabel, vocab, loadVocab, loadCatalog, route, href, setParams,
-  rangeStartMs, rangeToSec, timeRange, customWindow,
+  rangeStartMs, timeRange, customWindow,
   activeRerun: null,
   clearExplicitWindow: null,
   activeQueryInput: null,
