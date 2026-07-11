@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::store::trace_store::{AttributeValue, Span, SpanKind, SpanStatus};
 use smallvec::SmallVec;
