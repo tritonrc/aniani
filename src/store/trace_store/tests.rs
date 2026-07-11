@@ -219,6 +219,71 @@ fn test_trace_result() {
 }
 
 #[test]
+fn test_trace_result_error_count() {
+    let mut store = TraceStore::new();
+    let tid = [1u8; 16];
+    let root = make_span(
+        &mut store.interner,
+        tid,
+        [1u8; 8],
+        None,
+        "root",
+        "svc",
+        1000,
+        500,
+        SpanStatus::Ok,
+    );
+    let child_ok = make_span(
+        &mut store.interner,
+        tid,
+        [2u8; 8],
+        Some([1u8; 8]),
+        "child-ok",
+        "svc",
+        1100,
+        100,
+        SpanStatus::Ok,
+    );
+    let child_err = make_span(
+        &mut store.interner,
+        tid,
+        [3u8; 8],
+        Some([1u8; 8]),
+        "child-err",
+        "svc",
+        1200,
+        100,
+        SpanStatus::Error,
+    );
+    store.ingest_spans(vec![root, child_ok, child_err]);
+
+    let result = store.trace_result(&tid).unwrap();
+    assert_eq!(result.span_count, 3);
+    assert_eq!(result.error_count, 1);
+}
+
+#[test]
+fn test_trace_result_error_count_zero_for_clean_trace() {
+    let mut store = TraceStore::new();
+    let tid = [2u8; 16];
+    let span = make_span(
+        &mut store.interner,
+        tid,
+        [1u8; 8],
+        None,
+        "root",
+        "svc",
+        1000,
+        500,
+        SpanStatus::Ok,
+    );
+    store.ingest_spans(vec![span]);
+
+    let result = store.trace_result(&tid).unwrap();
+    assert_eq!(result.error_count, 0);
+}
+
+#[test]
 fn test_recent_traces_returns_most_recent_first() {
     let mut store = TraceStore::new();
 

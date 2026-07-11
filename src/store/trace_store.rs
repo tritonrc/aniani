@@ -106,6 +106,8 @@ pub struct TraceResult {
     pub start_time_ns: i64,
     pub duration_ns: i64,
     pub span_count: usize,
+    /// Number of spans in the trace with `SpanStatus::Error`.
+    pub error_count: usize,
 }
 
 /// In-memory trace storage with indexes.
@@ -299,6 +301,11 @@ impl TraceStore {
             .max()
             .unwrap_or(0);
 
+        let error_count = spans
+            .iter()
+            .filter(|s| s.status == SpanStatus::Error)
+            .count();
+
         Some(TraceResult {
             trace_id: *trace_id,
             root_service_name: self.interner.resolve(&root.service_name).to_string(),
@@ -306,6 +313,7 @@ impl TraceStore {
             start_time_ns: start,
             duration_ns: end.saturating_sub(start),
             span_count: spans.len(),
+            error_count,
         })
     }
 

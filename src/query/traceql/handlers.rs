@@ -88,6 +88,7 @@ pub async fn search(
                     "rootTraceName": tr.root_span_name,
                     "startTimeUnixNano": tr.start_time_ns.to_string(),
                     "durationMs": tr.duration_ns / 1_000_000,
+                    "errorCount": tr.error_count,
                     "spanSets": [],
                 })
             })
@@ -130,30 +131,37 @@ pub async fn search(
             let trace_id = hex::encode_upper(&r.trace_id);
             // Find the actual root span from the trace store, not the first matched span
             let root_info = store.trace_result(&r.trace_id);
-            let (root_service, root_name, root_start_ns, root_duration_ns) = match &root_info {
-                Some(tr) => (
-                    tr.root_service_name.as_str(),
-                    tr.root_span_name.as_str(),
-                    tr.start_time_ns,
-                    tr.duration_ns,
-                ),
-                None => {
-                    // Fallback to first matched span if trace_result unavailable
-                    let first = r.matched_spans.first();
-                    (
-                        first.map(|s| s.service_name.as_str()).unwrap_or(""),
-                        first.map(|s| s.name.as_str()).unwrap_or(""),
-                        first.map(|s| s.start_time_ns).unwrap_or(0),
-                        first.map(|s| s.duration_ns).unwrap_or(0),
-                    )
-                }
-            };
+            let (root_service, root_name, root_start_ns, root_duration_ns, error_count) =
+                match &root_info {
+                    Some(tr) => (
+                        tr.root_service_name.as_str(),
+                        tr.root_span_name.as_str(),
+                        tr.start_time_ns,
+                        tr.duration_ns,
+                        tr.error_count,
+                    ),
+                    None => {
+                        // Fallback to first matched span if trace_result unavailable
+                        let first = r.matched_spans.first();
+                        (
+                            first.map(|s| s.service_name.as_str()).unwrap_or(""),
+                            first.map(|s| s.name.as_str()).unwrap_or(""),
+                            first.map(|s| s.start_time_ns).unwrap_or(0),
+                            first.map(|s| s.duration_ns).unwrap_or(0),
+                            r.matched_spans
+                                .iter()
+                                .filter(|s| s.status == SpanStatus::Error)
+                                .count(),
+                        )
+                    }
+                };
             json!({
                 "traceID": trace_id.to_lowercase(),
                 "rootServiceName": root_service,
                 "rootTraceName": root_name,
                 "startTimeUnixNano": root_start_ns.to_string(),
                 "durationMs": root_duration_ns / 1_000_000,
+                "errorCount": error_count,
                 "spanSets": [{
                     "spans": r.matched_spans.iter().map(|s| {
                         json!({
@@ -343,6 +351,99 @@ mod hex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::empty_test_state;
+    use crate::store::trace_store::{Span, SpanKind};
+    use smallvec::SmallVec;
+
+    fn insert_trace_with_one_error(state: &crate::store::SharedState, trace_id: [u8; 16]) {
+        let mut store = state.trace_store.write();
+        let root_name = store.interner.get_or_intern("root");
+        let child_name = store.interner.get_or_intern("child");
+        let service = store.interner.get_or_intern("svc");
+        store.ingest_spans(vec![
+            Span {
+                trace_id,
+                span_id: [1u8; 8],
+                parent_span_id: None,
+                name: root_name,
+                service_name: service,
+                start_time_ns: 1000,
+                duration_ns: 500,
+                status: SpanStatus::Ok,
+                kind: SpanKind::Unspecified,
+                attributes: SmallVec::new(),
+                events: Vec::new(),
+                ingest_seq: 0,
+            },
+            Span {
+                trace_id,
+                span_id: [2u8; 8],
+                parent_span_id: Some([1u8; 8]),
+                name: child_name,
+                service_name: service,
+                start_time_ns: 1100,
+                duration_ns: 100,
+                status: SpanStatus::Error,
+                kind: SpanKind::Unspecified,
+                attributes: SmallVec::new(),
+                events: Vec::new(),
+                ingest_seq: 0,
+            },
+        ]);
+    }
+
+    async fn search_json(
+        state: crate::store::SharedState,
+        params: SearchParams,
+    ) -> (StatusCode, Value) {
+        use http_body_util::BodyExt;
+
+        let response = search(State(state), Query(params)).await.into_response();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        (status, body)
+    }
+
+    #[tokio::test]
+    async fn test_search_no_query_includes_error_count() {
+        let state = empty_test_state();
+        insert_trace_with_one_error(&state, [1u8; 16]);
+
+        let (status, body) = search_json(
+            state,
+            SearchParams {
+                q: None,
+                start: None,
+                end: None,
+                limit: None,
+            },
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["traces"][0]["errorCount"], json!(1));
+    }
+
+    #[tokio::test]
+    async fn test_search_with_query_includes_error_count() {
+        let state = empty_test_state();
+        insert_trace_with_one_error(&state, [2u8; 16]);
+
+        let (status, body) = search_json(
+            state,
+            SearchParams {
+                q: Some("{ status = error }".to_string()),
+                start: None,
+                end: None,
+                limit: None,
+            },
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["traces"][0]["errorCount"], json!(1));
+    }
 
     #[test]
     fn test_param_to_ns_saturates_huge_nanosecond_value() {
