@@ -251,22 +251,23 @@ fn diagnose_service(state: &SharedState, service: &str) -> axum::response::Respo
         };
 
         // Recent errors: bounded to last 1 hour, take top 10 by timestamp desc
-        let mut errors: Vec<Value> = Vec::new();
+        let mut errors: Vec<(i64, Value)> = Vec::new();
         for sid in &error_stream_ids {
             let entries = store.get_entries(*sid, lookback_start, now);
             for entry in entries {
-                errors.push(json!({
-                    "timestamp": entry.timestamp_ns.to_string(),
-                    "line": entry.line,
-                }));
+                errors.push((
+                    entry.timestamp_ns,
+                    json!({
+                        "timestamp": entry.timestamp_ns.to_string(),
+                        "line": entry.line,
+                    }),
+                ));
             }
         }
-        errors.sort_by(|a, b| {
-            let ta = a["timestamp"].as_str().unwrap_or("0");
-            let tb = b["timestamp"].as_str().unwrap_or("0");
-            tb.cmp(ta)
-        });
-        errors.truncate(10);
+        // Sort by numeric timestamp descending. Lexicographic string compare is
+        // only correct for equal-length values.
+        errors.sort_by_key(|(ts, _)| std::cmp::Reverse(*ts));
+        let errors: Vec<Value> = errors.into_iter().take(10).map(|(_, v)| v).collect();
 
         // Error trend: reuse cached error_stream_ids
         let mut current = 0usize;

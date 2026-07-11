@@ -93,23 +93,24 @@ fn summarize_logs(
         },
     ];
 
-    let mut logs = Vec::new();
+    let mut logs: Vec<(i64, serde_json::Value)> = Vec::new();
     for stream_id in store.query_streams(&matchers) {
         for entry in store.get_entries(stream_id, start_ns, end_ns) {
-            logs.push(json!({
-                "timestamp": entry.timestamp_ns.to_string(),
-                "line": entry.line,
-            }));
+            logs.push((
+                entry.timestamp_ns,
+                json!({
+                    "timestamp": entry.timestamp_ns.to_string(),
+                    "line": entry.line,
+                }),
+            ));
         }
     }
 
-    logs.sort_by(|a, b| {
-        let a_ts = a["timestamp"].as_str().unwrap_or("0");
-        let b_ts = b["timestamp"].as_str().unwrap_or("0");
-        b_ts.cmp(a_ts)
-    });
+    // Sort by numeric timestamp descending (newest first). Comparing the string
+    // form lexicographically is only correct for equal-length values.
+    logs.sort_by_key(|(ts, _)| std::cmp::Reverse(*ts));
     logs.truncate(MAX_LOG_ITEMS);
-    logs
+    logs.into_iter().map(|(_, v)| v).collect()
 }
 
 fn summarize_metrics(state: &SharedState, service: &str) -> Vec<serde_json::Value> {
