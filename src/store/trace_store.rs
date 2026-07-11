@@ -97,6 +97,19 @@ pub struct Span {
     pub ingest_seq: u64,
 }
 
+/// Count how many of the given span statuses are `SpanStatus::Error`. Takes
+/// an iterator of `&SpanStatus` (rather than `&[Span]`) so callers can share
+/// this across both `Span` (the store's type) and `MatchedSpan` (the TraceQL
+/// eval layer's type) — shared by every code path that derives an error
+/// count from a set of spans, so the definition of "error count" can't drift
+/// between them.
+pub fn count_error_spans<'a>(statuses: impl IntoIterator<Item = &'a SpanStatus>) -> usize {
+    statuses
+        .into_iter()
+        .filter(|s| **s == SpanStatus::Error)
+        .count()
+}
+
 /// Result of a trace search.
 #[derive(Debug, Clone)]
 pub struct TraceResult {
@@ -301,10 +314,7 @@ impl TraceStore {
             .max()
             .unwrap_or(0);
 
-        let error_count = spans
-            .iter()
-            .filter(|s| s.status == SpanStatus::Error)
-            .count();
+        let error_count = count_error_spans(spans.iter().map(|s| &s.status));
 
         Some(TraceResult {
             trace_id: *trace_id,

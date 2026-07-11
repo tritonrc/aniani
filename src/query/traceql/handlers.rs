@@ -11,7 +11,7 @@ use super::eval::evaluate_traceql;
 use super::parser::parse_traceql;
 use crate::store::SharedState;
 use crate::store::TraceStore;
-use crate::store::trace_store::{AttributeValue, SpanStatus};
+use crate::store::trace_store::{AttributeValue, SpanStatus, count_error_spans};
 
 /// Hint included in TraceQL parse error responses to help agents construct valid queries.
 const TRACEQL_HINT: &str = "Example: { resource.service.name = \"myapp\" && status = error }";
@@ -141,17 +141,16 @@ pub async fn search(
                         tr.error_count,
                     ),
                     None => {
-                        // Fallback to first matched span if trace_result unavailable
+                        // Fallback to first matched span if trace_result unavailable.
+                        // Best-effort: this error count is scoped to matched_spans
+                        // only, not the whole trace (trace_result's count is).
                         let first = r.matched_spans.first();
                         (
                             first.map(|s| s.service_name.as_str()).unwrap_or(""),
                             first.map(|s| s.name.as_str()).unwrap_or(""),
                             first.map(|s| s.start_time_ns).unwrap_or(0),
                             first.map(|s| s.duration_ns).unwrap_or(0),
-                            r.matched_spans
-                                .iter()
-                                .filter(|s| s.status == SpanStatus::Error)
-                                .count(),
+                            count_error_spans(r.matched_spans.iter().map(|s| &s.status)),
                         )
                     }
                 };
