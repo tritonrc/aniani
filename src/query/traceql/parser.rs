@@ -243,23 +243,32 @@ fn parse_conditions(input: &str) -> IResult<&str, (Vec<SpanCondition>, Vec<Logic
 fn parse_condition(input: &str) -> IResult<&str, SpanCondition> {
     let (input, _) = multispace0(input)?;
 
-    // Try duration first
-    if let Ok(result) = parse_duration_condition(input) {
-        return Ok(result);
+    // Keyword-dispatched conditions parse definitively: when the keyword
+    // matches, a malformed condition fails the whole parse rather than
+    // silently falling through to attribute parsing (which would otherwise
+    // misinterpret e.g. "status >= 5" and return misleading empty results).
+    if peek_keyword(input, "duration") {
+        return parse_duration_condition(input);
     }
-
-    // Try status
-    if let Ok(result) = parse_status_condition(input) {
-        return Ok(result);
+    if peek_keyword(input, "status") {
+        return parse_status_condition(input);
     }
-
-    // Try name
-    if let Ok(result) = parse_name_condition(input) {
-        return Ok(result);
+    if peek_keyword(input, "name") {
+        return parse_name_condition(input);
     }
-
-    // Try attribute
     parse_attribute_condition(input)
+}
+
+/// True if `input` starts with `keyword` followed by a non-identifier boundary
+/// (whitespace/operator/end), so "status" matches but "statuscode" does not.
+fn peek_keyword(input: &str, keyword: &str) -> bool {
+    if !input.starts_with(keyword) {
+        return false;
+    }
+    match input[keyword.len()..].chars().next() {
+        None => true,
+        Some(c) => !(c.is_alphanumeric() || c == '_' || c == '.'),
+    }
 }
 
 fn parse_duration_condition(input: &str) -> IResult<&str, SpanCondition> {
@@ -282,6 +291,15 @@ fn parse_status_condition(input: &str) -> IResult<&str, SpanCondition> {
         map(tag("unset"), |_| SpanStatusValue::Unset),
     ))
     .parse_complete(input)?;
+    // Status is an unordered enum: only = and != are meaningful. Any other
+    // operator is rejected so the query fails to parse instead of evaluating
+    // to silently-empty results.
+    if !matches!(op, CompareOp::Eq | CompareOp::Neq) {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        )));
+    }
     Ok((input, SpanCondition::Status { op, value: status }))
 }
 
@@ -763,5 +781,26 @@ mod tests {
     fn test_trailing_or_is_parse_error() {
         let result = parse_traceql("{ status = error || }");
         assert!(result.is_err(), "trailing || should be a parse error");
+    }
+
+    #[test]
+    fn test_status_with_unsupported_operator_is_parse_error() {
+        // Status is an unordered enum: ordering operators are meaningless and
+        // must be rejected rather than silently returning empty results.
+        for q in [
+            "{ status >= error }",
+            "{ status < ok }",
+            "{ status > unset }",
+            "{ status <= error }",
+        ] {
+            let result = parse_traceql(q);
+            assert!(result.is_err(), "expected parse error for: {}", q);
+        }
+    }
+
+    #[test]
+    fn test_status_neq_still_parses() {
+        let expr = parse_traceql("{ status != error }").unwrap();
+        assert!(matches!(expr, TraceQLExpr::SpanSelector { .. }));
     }
 }
