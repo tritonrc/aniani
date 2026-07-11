@@ -66,10 +66,10 @@ pub(in crate::mcp::tools) fn handle_query_traces(
             );
         }
     };
-    // Collect matched trace IDs under the eval lock, then drop it before
-    // summarizing each — synth::trace_item takes its own read lock and
-    // parking_lot RwLock is not re-entrant. A concurrent reset between these two
-    // phases is possible but benign: affected IDs return None and are skipped.
+    // Collect matched trace IDs under the eval lock, then summarize the page
+    // under a single read lock via synth::trace_items (one acquisition instead
+    // of N). A concurrent reset between these two phases is possible but
+    // benign: affected IDs return None and are skipped.
     let trace_ids: Vec<[u8; 16]> = {
         let store = state.trace_store.read();
         evaluate_traceql(&expr, &store)
@@ -79,10 +79,9 @@ pub(in crate::mcp::tools) fn handle_query_traces(
     };
     let total = trace_ids.len();
     let truncated = total > limit;
-    let out: Vec<Value> = trace_ids
-        .iter()
-        .take(limit)
-        .filter_map(|tid| synth::trace_item(state, tid))
+    let page: &[[u8; 16]] = &trace_ids[..total.min(limit)];
+    let out: Vec<Value> = synth::trace_items(state, page)
+        .into_iter()
         .filter_map(|t| serde_json::to_value(&t).ok())
         .collect();
     let shown = out.len();

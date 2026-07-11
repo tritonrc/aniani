@@ -11,7 +11,7 @@ pub use activity::{
 };
 pub use catalog::{LabelInfo, ServiceCatalog, describe_service};
 pub use health::{HealthOverview, ServiceHealth, check_health};
-pub use trace::{SpanNode, TraceTree, build_trace_tree, trace_item};
+pub use trace::{SpanNode, TraceTree, build_trace_tree, trace_item, trace_items};
 
 pub(super) const DEFAULT_TOP: usize = 20;
 pub(super) const DETAILED_TOP: usize = 100;

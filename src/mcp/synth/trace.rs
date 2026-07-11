@@ -27,6 +27,21 @@ pub struct SpanNode {
 /// number of error spans. Returns `None` if the trace has no spans.
 pub fn trace_item(state: &SharedState, trace_id: &[u8; 16]) -> Option<TraceItem> {
     let store = state.trace_store.read();
+    trace_item_locked(&store, trace_id)
+}
+
+/// Summarize many traces under a single read lock, skipping any that no longer
+/// exist. Cheaper than calling `trace_item` per ID (one lock acquisition
+/// instead of N) for the `query_traces` result page.
+pub fn trace_items(state: &SharedState, trace_ids: &[[u8; 16]]) -> Vec<TraceItem> {
+    let store = state.trace_store.read();
+    trace_ids
+        .iter()
+        .filter_map(|tid| trace_item_locked(&store, tid))
+        .collect()
+}
+
+fn trace_item_locked(store: &crate::store::TraceStore, trace_id: &[u8; 16]) -> Option<TraceItem> {
     let spans = store.get_trace(trace_id)?;
     let error_span_count = spans
         .iter()
