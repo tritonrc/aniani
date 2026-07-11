@@ -7,7 +7,7 @@ use nom::{
     branch::alt,
     bytes::tag,
     character::{char, multispace0},
-    combinator::map,
+    combinator::{cut, map},
     multi::separated_list0,
 };
 use regex::Regex;
@@ -19,8 +19,51 @@ use crate::config::parse_duration;
 /// LogQL parse errors.
 #[derive(Debug, Error)]
 pub enum LogQLParseError {
-    #[error("parse error: {0}")]
-    Parse(String),
+    #[error("parse error at position {pos}: {msg}")]
+    Parse { pos: usize, msg: String },
+}
+
+/// Maps a nom failure on `trimmed` into a `LogQLParseError` with a human message,
+/// offsetting the reported position by `leading_ws` so it points into the
+/// original (untrimmed) query string the caller typed.
+fn nom_err_to_human(
+    trimmed: &str,
+    err: nom::Err<nom::error::Error<&str>>,
+    leading_ws: usize,
+) -> LogQLParseError {
+    let remaining = match &err {
+        nom::Err::Error(e) | nom::Err::Failure(e) => e.input,
+        nom::Err::Incomplete(_) => "",
+    };
+    let pos_in_trimmed = trimmed.len().saturating_sub(remaining.len());
+    let msg = classify_parse_failure(trimmed, pos_in_trimmed);
+    LogQLParseError::Parse {
+        pos: leading_ws + pos_in_trimmed,
+        msg,
+    }
+}
+
+/// Turns a failure position into a plain-language hint by looking at what
+/// immediately precedes it. Coarse-grained on purpose: covers the handful of
+/// common mistakes (unquoted value, missing label name, unclosed selector)
+/// and falls back to a generic message for everything else.
+fn classify_parse_failure(input: &str, pos: usize) -> String {
+    let pos = pos.min(input.len());
+    let before = input[..pos].trim_end();
+
+    if before.ends_with('=') {
+        return "expected a quoted value after '='".to_string();
+    }
+    if before.ends_with('{') || before.ends_with(',') {
+        return "expected a label name".to_string();
+    }
+    if pos >= input.len() {
+        if input.contains('{') && !input.contains('}') {
+            return "expected '}' to close the selector".to_string();
+        }
+        return "unexpected end of query".to_string();
+    }
+    "unexpected input here".to_string()
 }
 
 /// Top-level LogQL expression.
@@ -92,34 +135,39 @@ pub enum MetricFunc {
 
 /// Parse a LogQL expression.
 pub fn parse_logql(input: &str) -> Result<LogQLExpr, LogQLParseError> {
-    let input = input.trim();
+    // Position offset from any trimmed leading whitespace, so reported
+    // positions point into the original (untrimmed) query the caller typed.
+    let leading_ws = input.len() - input.trim_start().len();
+    let trimmed = input.trim();
 
     // Try metric query first
-    if let Ok((remaining, expr)) = parse_metric_query(input) {
-        let remaining = remaining.trim();
-        if remaining.is_empty() {
+    if let Ok((remaining, expr)) = parse_metric_query(trimmed) {
+        let remaining_trimmed = remaining.trim_start();
+        if remaining_trimmed.is_empty() {
             return Ok(expr);
         }
-        return Err(LogQLParseError::Parse(format!(
-            "unexpected trailing input: {}",
-            remaining
-        )));
+        let pos = leading_ws + (trimmed.len() - remaining_trimmed.len());
+        return Err(LogQLParseError::Parse {
+            pos,
+            msg: "unexpected trailing input".to_string(),
+        });
     }
 
     // Try pipeline or stream selector
-    match parse_pipeline_or_selector(input) {
+    match parse_pipeline_or_selector(trimmed) {
         Ok((remaining, expr)) => {
-            let remaining = remaining.trim();
-            if remaining.is_empty() {
+            let remaining_trimmed = remaining.trim_start();
+            if remaining_trimmed.is_empty() {
                 Ok(expr)
             } else {
-                Err(LogQLParseError::Parse(format!(
-                    "unexpected trailing input: {}",
-                    remaining
-                )))
+                let pos = leading_ws + (trimmed.len() - remaining_trimmed.len());
+                Err(LogQLParseError::Parse {
+                    pos,
+                    msg: "unexpected trailing input".to_string(),
+                })
             }
         }
-        Err(e) => Err(LogQLParseError::Parse(format!("{}", e))),
+        Err(e) => Err(nom_err_to_human(trimmed, e, leading_ws)),
     }
 }
 
@@ -221,7 +269,9 @@ fn parse_matcher(input: &str) -> IResult<&str, LogQLMatcher> {
     ))
     .parse_complete(input)?;
     let (input, _) = multispace0().parse_complete(input)?;
-    let (input, value) = parse_quoted_string(input)?;
+    // Once name+op have matched, a missing quoted value is a hard error, not a
+    // reason for the caller (e.g. separated_list0) to silently backtrack.
+    let (input, value) = cut(parse_quoted_string).parse_complete(input)?;
 
     Ok((
         input,
@@ -310,7 +360,7 @@ fn parse_json_or_label_filter(input: &str) -> IResult<&str, PipelineStage> {
     ))
     .parse_complete(input)?;
     let (input, _) = multispace0().parse_complete(input)?;
-    let (input, value) = parse_quoted_string(input)?;
+    let (input, value) = cut(parse_quoted_string).parse_complete(input)?;
 
     let compiled_regex = match op {
         MatchOp::Regex | MatchOp::NotRegex => {

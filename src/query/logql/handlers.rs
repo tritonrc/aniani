@@ -13,7 +13,7 @@ use super::parser::parse_logql;
 use crate::store::SharedState;
 
 /// Hint included in LogQL parse error responses to help agents construct valid queries.
-const LOGQL_HINT: &str = "Example: {service=\"myapp\"} |= \"error\"";
+const LOGQL_HINT: &str = r#"Example: {service="myapp", level="error"} |= "timeout""#;
 
 /// Maximum number of steps allowed in a range query. Matches Prometheus default of 11,000.
 const MAX_QUERY_STEPS: i64 = 11_000;

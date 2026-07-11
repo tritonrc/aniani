@@ -158,3 +158,64 @@ fn test_metric_query_rejects_trailing_garbage() {
         "trailing input after metric query must error"
     );
 }
+
+#[test]
+fn test_parse_error_never_leaks_nom_debug_output() {
+    let msg = parse_logql(r#"{service="#).unwrap_err().to_string();
+    assert!(
+        msg.contains("position"),
+        "expected a human message with a byte position, got: {msg}"
+    );
+    assert!(
+        !msg.contains("code:") && !msg.contains("Parsing Error") && !msg.contains("Error {"),
+        "nom debug output leaked into the error message: {msg}"
+    );
+}
+
+#[test]
+fn test_parse_error_missing_quoted_value_after_eq() {
+    let input = r#"{service="#;
+    let msg = parse_logql(input).unwrap_err().to_string();
+    assert!(
+        msg.contains("expected a quoted value after '='"),
+        "got: {msg}"
+    );
+    // Failure occurs right after the `=`, i.e. at the end of the input here.
+    assert!(
+        msg.contains(&format!("position {}", input.len())),
+        "got: {msg}"
+    );
+}
+
+#[test]
+fn test_parse_error_unclosed_selector() {
+    let msg = parse_logql(r#"{service="payments""#)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        msg.contains("expected '}' to close the selector"),
+        "got: {msg}"
+    );
+}
+
+#[test]
+fn test_parse_error_bad_label_name() {
+    let msg = parse_logql(r#"{="payments"}"#).unwrap_err().to_string();
+    assert!(msg.contains("expected a label name"), "got: {msg}");
+    assert!(msg.contains("position 1"), "got: {msg}");
+}
+
+#[test]
+fn test_parse_error_position_mid_query() {
+    // Failure is mid-query (not at the start, not at EOF): a second matcher
+    // with an unquoted value, followed by more input.
+    let input = r#"{service="payments", level=, foo="bar"}"#;
+    let msg = parse_logql(input).unwrap_err().to_string();
+    assert!(
+        msg.contains("expected a quoted value after '='"),
+        "got: {msg}"
+    );
+    let fail_pos = input.find("=, foo").unwrap() + 1; // position right after the second `=`
+    assert!(fail_pos > 0 && fail_pos < input.len() - 1, "sanity check");
+    assert!(msg.contains(&format!("position {fail_pos}")), "got: {msg}");
+}

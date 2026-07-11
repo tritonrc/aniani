@@ -161,6 +161,28 @@ fn test_format_logql_result_omits_trace_id_metadata_when_absent() {
     assert_eq!(entry[1], "hello");
 }
 
+#[tokio::test]
+async fn test_query_inner_parse_error_includes_position_and_hint() {
+    use crate::store::empty_test_state;
+
+    let state = empty_test_state();
+    let params = QueryParams {
+        query: r#"{service="#.to_string(),
+        time: None,
+        limit: None,
+    };
+    let (status, Json(body)) = query_inner(state, params).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["status"], "error");
+    let error = body["error"].as_str().unwrap();
+    assert!(error.contains("position"), "got: {error}");
+    assert!(
+        !error.contains("code:") && !error.contains("Parsing Error"),
+        "nom debug output leaked into handler response: {error}"
+    );
+    assert_eq!(body["hint"], LOGQL_HINT);
+}
+
 #[test]
 fn test_format_logql_result_includes_trace_id_metadata_when_present() {
     use super::super::eval::{LogQLResult, StreamResult};
