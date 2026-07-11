@@ -28,6 +28,32 @@ function hourAgoMs() {
   return Date.now() - 3600 * 1000
 }
 
+// --- hash-router helpers ---------------------------------------------------
+
+// '#/logs?q=%7B...%7D' -> { tab: 'logs', params: { q: '{...}' } }
+// Empty/unknown hash -> { tab: 'home', params: {} }. Unknown params kept verbatim.
+function parseHash(hash) {
+  const body = (hash || '').replace(/^#\/?/, '')
+  const qIdx = body.indexOf('?')
+  const tab = (qIdx === -1 ? body : body.slice(0, qIdx)) || 'home'
+  const qs = qIdx === -1 ? '' : body.slice(qIdx + 1)
+  return { tab, params: Object.fromEntries(new URLSearchParams(qs)) }
+}
+
+// buildHash('logs', { q: '{service="x"}', start: '123' }) -> '#/logs?q=...&start=123'
+// Omits empty/null params. buildHash('home', {}) -> '#/'
+function buildHash(tab, params) {
+  const usp = new URLSearchParams()
+  for (const [k, v] of Object.entries(params || {})) {
+    if (v === null || v === undefined || v === '') continue
+    usp.set(k, v)
+  }
+  const qs = usp.toString()
+  const path = tab && tab !== 'home' ? tab : ''
+  return '#/' + path + (qs ? '?' + qs : '')
+}
+const href = buildHash // alias used in templates for <a> links
+
 // Escape a label value for safe insertion into a double-quoted query literal.
 function escLabel(v) {
   return String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')
@@ -601,6 +627,7 @@ const AiAsk = {
 // Placeholder components replaced in Tasks 4-6.
 const Logs = {
   components: { AiAsk },
+  mixins: [routeAware('logs')],
   template: `
     <section class="view">
       <h2>Logs</h2>
@@ -649,6 +676,10 @@ const Logs = {
     },
   },
   methods: {
+    applyRoute(params) {
+      this.query = params.q || this.query
+      if (params.q && params.q !== this.lastRunQuery) this.run()
+    },
     onAi(q) { this.query = q; this.run() },
     pick(c) { this.query = c; this.run() },
     async run() {
@@ -656,6 +687,8 @@ const Logs = {
       this.loading = true
       this.ran = true
       this.rows = []
+      this.lastRunQuery = this.query
+      window.__aniani.setParams({ q: this.query })
       try {
         const endNs = String(Date.now() * 1_000_000)
         const startNs = String(window.__aniani.hourAgoMs() * 1_000_000)
@@ -693,6 +726,7 @@ const Logs = {
 }
 const Metrics = {
   components: { AiAsk },
+  mixins: [routeAware('metrics')],
   template: `
     <section class="view">
       <h2>Metrics</h2>
@@ -751,6 +785,14 @@ const Metrics = {
     },
   },
   methods: {
+    applyRoute(params) {
+      this.query = params.q || this.query
+      if (params.service && params.service !== this.service) {
+        this.service = params.service
+        this.onService()
+      }
+      if (params.q && params.q !== this.lastRunQuery) this.run()
+    },
     onAi(q) { this.query = q; this.run() },
     async onService() { if (this.service) await window.__aniani.loadCatalog(this.service) },
     pick(c) { this.query = c; this.run() },
@@ -767,6 +809,8 @@ const Metrics = {
       this.loading = true
       this.ran = true
       this.rows = []
+      this.lastRunQuery = this.query
+      window.__aniani.setParams({ q: this.query })
       try {
         const endSec = Math.floor(Date.now() / 1000)
         const startSec = Math.floor(window.__aniani.hourAgoMs() / 1000)
@@ -803,6 +847,7 @@ const Metrics = {
 }
 const Traces = {
   components: { AiAsk, TraceView },
+  mixins: [routeAware('traces')],
   template: `
     <section class="view">
       <h2>Traces</h2>
@@ -867,6 +912,7 @@ const Traces = {
       selected: null,
       selectedId: '',
       detailError: '',
+      routeTraceId: '', // set by applyRoute; consumed by a later task
     }
   },
   computed: {
@@ -877,6 +923,11 @@ const Traces = {
     },
   },
   methods: {
+    applyRoute(params) {
+      this.query = params.q || this.query
+      this.routeTraceId = params.trace || this.routeTraceId
+      if (params.q && params.q !== this.lastRunQuery) this.run()
+    },
     onAi(q) { this.query = q; this.run() },
     pick(c) { this.query = c; this.run() },
     shortId(id) {
@@ -890,6 +941,8 @@ const Traces = {
       this.selected = null
       this.selectedId = ''
       this.detailError = ''
+      this.lastRunQuery = this.query
+      window.__aniani.setParams({ q: this.query })
       try {
         const url =
           '/api/search?q=' + encodeURIComponent(this.query) + '&limit=20'
@@ -915,6 +968,56 @@ const Traces = {
   },
 }
 
+// Reactive route, kept in sync with location.hash. `seq` bumps on every
+// hashchange so views can watch a single primitive instead of deep-watching
+// `params`.
+const route = reactive({ tab: 'home', params: {}, seq: 0 })
+
+// Re-derive route from location.hash. Bound to the 'hashchange' event, and
+// called once before the initial mount to honor a deep link on page load.
+function syncFromLocation() {
+  const { tab, params } = parseHash(location.hash)
+  route.tab = tab
+  route.params = params
+  route.seq++
+}
+
+// Update the hash's query params in place (same tab) without adding a history
+// entry and without re-triggering applyRoute. history.replaceState never
+// fires 'hashchange' (only direct location.hash assignment or user
+// navigation does), so this is loop-free with no extra flag needed.
+function setParams(params) {
+  const next = buildHash(route.tab, params)
+  const current = location.hash || '#/'
+  if (next !== current) history.replaceState(null, '', next)
+  route.params = params
+}
+window.addEventListener('hashchange', syncFromLocation)
+
+// Mixin factory: wires a view's applyRoute(params) to first mount, keep-alive
+// reactivation, and hash changes while `tabId` is the active tab.
+function routeAware(tabId) {
+  return {
+    data() {
+      return { lastRunQuery: '' }
+    },
+    computed: {
+      routeSeq() { return route.seq },
+    },
+    watch: {
+      routeSeq() {
+        if (route.tab === tabId) this.applyRoute(route.params)
+      },
+    },
+    mounted() {
+      if (route.tab === tabId) this.applyRoute(route.params)
+    },
+    activated() {
+      if (route.tab === tabId) this.applyRoute(route.params)
+    },
+  }
+}
+
 const App = {
   components: { Landing, Logs, Metrics, Traces },
   template: `
@@ -922,22 +1025,24 @@ const App = {
       <header>
         <h1>Aniani</h1>
         <nav class="tabs">
-          <button
+          <a
             v-for="t in tabs"
             :key="t.id"
-            :class="{ active: activeTab === t.id }"
-            @click="activeTab = t.id"
-          >{{ t.label }}</button>
+            :href="href(t.id, {})"
+            :class="{ active: route.tab === t.id }"
+          >{{ t.label }}</a>
         </nav>
       </header>
       <main>
-        <component :is="current"></component>
+        <keep-alive>
+          <component :is="current"></component>
+        </keep-alive>
       </main>
     </div>
   `,
   data() {
     return {
-      activeTab: 'home',
+      route,
       tabs: [
         { id: 'home', label: 'Overview', comp: 'Landing' },
         { id: 'logs', label: 'Logs', comp: 'Logs' },
@@ -948,14 +1053,16 @@ const App = {
   },
   computed: {
     current() {
-      const t = this.tabs.find((x) => x.id === this.activeTab)
+      const t = this.tabs.find((x) => x.id === this.route.tab)
       return t ? t.comp : 'Landing'
     },
   },
+  methods: { href },
 }
 
 // Export the shared helpers so later tasks can reference them within this file.
-window.__aniani = { apiGet, hourAgoMs, escLabel, vocab, loadVocab, loadCatalog }
+window.__aniani = { apiGet, hourAgoMs, escLabel, vocab, loadVocab, loadCatalog, route, href, setParams }
 
 loadVocab()
+syncFromLocation()
 createApp(App).mount('#app')

@@ -23,7 +23,7 @@ body {
 header h1 { margin: 16px 0 8px; font-size: 20px; }
 
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
-.tabs button {
+.tabs button, .tabs a {
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
@@ -31,9 +31,10 @@ header h1 { margin: 16px 0 8px; font-size: 20px; }
   padding: 8px 14px;
   cursor: pointer;
   font-size: 14px;
+  text-decoration: none;
 }
-.tabs button:hover { color: var(--fg); }
-.tabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tabs button:hover, .tabs a:hover { color: var(--fg); }
+.tabs button.active, .tabs a.active { color: var(--accent); border-bottom-color: var(--accent); }
 
 .view { padding-top: 16px; }
 .view h2 { margin: 0 0 12px; font-size: 16px; }
