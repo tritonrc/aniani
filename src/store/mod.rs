@@ -201,14 +201,17 @@ fn all_ids_posting_list(ids: Vec<u64>) -> PostingList {
     PostingList::from_ids(ids)
 }
 
-/// Process-wide cache of anchored label-matcher regexes. Repeated queries with
+/// Process-wide cache of anchored regexes. Repeated queries/evaluations with
 /// the same pattern (common in the agent dev loop) reuse the compiled `Regex`
-/// instead of recompiling on every call to `select_indexed_ids`. `Regex`
-/// clones cheaply (internally `Arc`-backed). The cache is unbounded but, for an
-/// ephemeral per-worktree instance, the set of distinct patterns is small.
-static REGEX_CACHE: OnceLock<Mutex<FxHashMap<String, Regex>>> = OnceLock::new();
+/// instead of recompiling. Shared by label matchers (`select_indexed_ids`) and
+/// PromQL `label_replace`. `Regex` clones cheaply (internally `Arc`-backed).
+/// The cache is unbounded but, for an ephemeral per-worktree instance, the set
+/// of distinct patterns is small.
+pub(crate) static REGEX_CACHE: OnceLock<Mutex<FxHashMap<String, Regex>>> = OnceLock::new();
 
-fn compiled_label_regex(pattern: &str) -> Option<Regex> {
+/// Compile (or fetch a cached) anchored regex for `pattern`: `^(?:pattern)$`.
+/// Returns `None` if the pattern is invalid.
+pub(crate) fn compiled_label_regex(pattern: &str) -> Option<Regex> {
     let cache = REGEX_CACHE.get_or_init(|| Mutex::new(FxHashMap::default()));
     if let Some(re) = cache.lock().get(pattern) {
         return Some(re.clone());

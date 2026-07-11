@@ -3,7 +3,6 @@
 use std::collections::BTreeMap;
 
 use promql_parser::parser::{Call, Expr, StringLiteral};
-use regex::Regex;
 
 use super::{PromQLError, PromQLResult, SeriesResult};
 
@@ -221,8 +220,8 @@ pub(super) fn eval_label_replace(
     let src_label = extract_string_arg(&call.args.args[3])?;
     let regex_str = extract_string_arg(&call.args.args[4])?;
 
-    let anchored = format!("^(?:{})$", regex_str);
-    let re = Regex::new(&anchored).map_err(|e| PromQLError::Eval(format!("bad regex: {}", e)))?;
+    let re = crate::store::compiled_label_regex(regex_str)
+        .ok_or_else(|| PromQLError::Eval(format!("invalid regex: {}", regex_str)))?;
 
     let series = match inner {
         PromQLResult::InstantVector(s) => s,
