@@ -429,6 +429,42 @@ a.trace-chip { color: var(--accent); }
 
 .load-more-row { margin-top: 10px; }
 
+/* ---- Metrics line chart ---- */
+.line-chart { position: relative; margin: 4px 0 16px; }
+.lc-svg { width: 100%; height: 240px; display: block; }
+.lc-grid { stroke: var(--border); stroke-width: 1; }
+.lc-axis-label { fill: var(--muted); font-size: 9px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.lc-hover-line { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 2; }
+.lc-empty { fill: var(--muted); font-size: 12px; }
+
+.lc-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; }
+.lc-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg);
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  cursor: pointer;
+}
+.lc-legend-item.hidden { opacity: 0.35; }
+.lc-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex: 0 0 auto; }
+
+.lc-tooltip {
+  position: absolute;
+  top: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+  pointer-events: none;
+  white-space: nowrap;
+  max-width: 260px;
+}
+.lc-tooltip-time { color: var(--muted); margin-bottom: 4px; }
+.lc-tooltip-row { display: flex; align-items: center; gap: 6px; }
+
 .err-caret {
   margin: 6px 0;
   padding: 8px 10px;
