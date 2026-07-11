@@ -206,6 +206,24 @@ fn test_parse_error_bad_label_name() {
 }
 
 #[test]
+fn test_parse_error_pipeline_missing_quoted_value() {
+    // A hard failure (`cut(parse_quoted_string)`) inside a pipeline stage must
+    // propagate out of the pipeline-stage loop instead of being swallowed and
+    // reported as generic trailing input at the `|`.
+    let input = r#"{service="x"} | level="#;
+    let msg = parse_logql(input).unwrap_err().to_string();
+    assert!(
+        msg.contains("expected a quoted value after '='"),
+        "got: {msg}"
+    );
+    // Failure occurs right after the `=`, i.e. at the end of the input here.
+    assert!(
+        msg.contains(&format!("position {}", input.len())),
+        "got: {msg}"
+    );
+}
+
+#[test]
 fn test_parse_error_position_mid_query() {
     // Failure is mid-query (not at the start, not at EOF): a second matcher
     // with an unquoted value, followed by more input.

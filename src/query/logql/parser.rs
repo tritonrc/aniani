@@ -223,11 +223,16 @@ fn parse_pipeline_or_selector(input: &str) -> IResult<&str, LogQLExpr> {
     let mut remaining = input;
     loop {
         let trimmed = remaining.trim_start();
-        if let Ok((rest, stage)) = parse_pipeline_stage(trimmed) {
-            stages.push(stage);
-            remaining = rest;
-        } else {
-            break;
+        match parse_pipeline_stage(trimmed) {
+            Ok((rest, stage)) => {
+                stages.push(stage);
+                remaining = rest;
+            }
+            // A hard failure (e.g. `cut(parse_quoted_string)` after `key=`)
+            // means this really is a pipeline stage that's malformed, not
+            // trailing input the caller should backtrack over — propagate it.
+            Err(err @ nom::Err::Failure(_)) => return Err(err),
+            Err(_) => break,
         }
     }
 
