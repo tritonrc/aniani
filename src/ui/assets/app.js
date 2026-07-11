@@ -18,7 +18,9 @@ async function apiGet(url) {
   }
   if (!res.ok || (json && json.status === 'error')) {
     const msg = (json && (json.error || json.message)) || text || res.statusText
-    throw new Error(msg)
+    const err = new Error(msg)
+    if (json && json.hint) err.hint = json.hint
+    throw err
   }
   return json
 }
@@ -26,6 +28,13 @@ async function apiGet(url) {
 // last-hour time window helpers
 function hourAgoMs() {
   return Date.now() - 3600 * 1000
+}
+
+// HH:MM:SS.mmm in local time, from a nanosecond timestamp (as Number).
+function formatLocalTime(tsNs) {
+  const d = new Date(tsNs / 1_000_000)
+  const pad = (n, len) => String(n).padStart(len, '0')
+  return pad(d.getHours(), 2) + ':' + pad(d.getMinutes(), 2) + ':' + pad(d.getSeconds(), 2) + '.' + pad(d.getMilliseconds(), 3)
 }
 
 // --- hash-router helpers ---------------------------------------------------
@@ -624,14 +633,18 @@ const AiAsk = {
   },
 }
 
-// Placeholder components replaced in Tasks 4-6.
+// Recognized `level` label values, in the order their severity badges are
+// defined below. Anything else (including a missing level) falls back to
+// the neutral 'sev-none' badge showing an em dash.
+const LOG_SEVERITIES = ['error', 'warn', 'info', 'debug']
+
 const Logs = {
   components: { AiAsk },
   mixins: [routeAware('logs')],
   template: `
     <section class="view">
       <h2>Logs</h2>
-      <form class="query-bar" @submit.prevent="run">
+      <form class="query-bar" @submit.prevent="onSubmit">
         <input
           v-model="query"
           list="logs-suggestions"
@@ -650,22 +663,49 @@ const Logs = {
         <option v-for="c in chips" :key="c" :value="c"></option>
       </datalist>
       <p v-if="error" class="error">{{ error }}</p>
+      <pre class="err-caret" v-if="errorCaret">{{ errorCaret.query }}
+{{ errorCaret.caret }}</pre>
+      <p v-if="errorHint" class="muted err-hint">{{ errorHint }}</p>
       <p v-if="loading" class="muted">Loading…</p>
-      <table v-if="rows.length" class="results">
-        <thead><tr><th>Time</th><th>Labels</th><th>Line</th></tr></thead>
-        <tbody>
-          <tr v-for="(r, i) in rows" :key="i">
-            <td class="ts">{{ r.time }}</td>
-            <td class="labels">{{ r.labels }}</td>
-            <td class="line">{{ r.line }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="log-rows" v-if="rows.length">
+        <div
+          class="log-row"
+          v-for="(r, i) in rows"
+          :key="i"
+          :class="{ 'is-error': sevInfo(r).cls === 'sev-error' }"
+        >
+          <div class="log-line1">
+            <span class="ts" :title="isoTime(r.tsNs)">{{ r.time }}</span>
+            <span class="sev" :class="sevInfo(r).cls">{{ sevInfo(r).text }}</span>
+            <span class="line" :class="{ clamped: isClamped(r.line) && !expandedRows[i] }">{{ r.line }}</span>
+          </div>
+          <button v-if="isClamped(r.line)" class="show-more-btn" @click="toggleExpand(i)">
+            {{ expandedRows[i] ? 'show less' : 'show more' }}
+          </button>
+          <div class="log-line2" v-if="r.labels.length">
+            <span class="lbl-chip" v-for="(pair, j) in r.labels" :key="j">[{{ pair[0] }}={{ pair[1] }}]</span>
+          </div>
+        </div>
+      </div>
       <p v-else-if="ran && !loading && !error" class="muted">No log lines matched.</p>
+      <div class="load-more-row" v-if="rows.length">
+        <button class="tv-btn" :disabled="limit >= 5000" @click="loadMore">Load more (currently {{ limit }})</button>
+      </div>
     </section>
   `,
   data() {
-    return { query: '', rows: [], error: '', loading: false, ran: false }
+    return {
+      query: '',
+      rows: [],
+      error: '',
+      errorHint: '',
+      loading: false,
+      ran: false,
+      limit: 200,
+      rangeStart: '',
+      rangeEnd: '',
+      expandedRows: {},
+    }
   },
   computed: {
     chips() {
@@ -674,43 +714,85 @@ const Logs = {
         .map((s) => '{service="' + window.__aniani.escLabel(s.name) + '"}')
       return [...svcs, '{level="error"}']
     },
+    // { query, caret } for the position-aligned error caret, or null when the
+    // current error has no `position N` to point at. Built from the query
+    // that produced the error (lastRunQuery), not the live input value.
+    errorCaret() {
+      if (!this.error) return null
+      const m = this.error.match(/position (\d+)/)
+      if (!m) return null
+      return { query: this.lastRunQuery, caret: ' '.repeat(parseInt(m[1], 10)) + '^' }
+    },
   },
   methods: {
     applyRoute(params) {
       this.query = params.q || this.query
+      this.rangeStart = params.start || ''
+      this.rangeEnd = params.end || ''
       if (params.q && params.q !== this.lastRunQuery) this.run()
     },
     onAi(q) { this.query = q; this.run() },
     pick(c) { this.query = c; this.run() },
+    // Manual Run clears any explicit route-supplied window, reverting to
+    // "last hour". Chips and AI-ask call run() directly and keep it.
+    onSubmit() {
+      this.rangeStart = ''
+      this.rangeEnd = ''
+      this.run()
+    },
+    loadMore() {
+      this.limit = Math.min(5000, this.limit * 2)
+      this.run()
+    },
+    sevInfo(r) {
+      const entry = r.labels.find((pair) => pair[0] === 'level')
+      const lvl = entry ? String(entry[1]).toLowerCase() : ''
+      return LOG_SEVERITIES.includes(lvl) ? { cls: 'sev-' + lvl, text: lvl } : { cls: 'sev-none', text: '—' }
+    },
+    isClamped(line) {
+      return line.length > 600 || line.split('\n').length > 6
+    },
+    isoTime(tsNs) {
+      return new Date(tsNs / 1_000_000).toISOString()
+    },
+    toggleExpand(i) {
+      this.expandedRows[i] = !this.expandedRows[i]
+    },
     async run() {
       this.error = ''
+      this.errorHint = ''
       this.loading = true
       this.ran = true
       this.rows = []
+      this.expandedRows = {}
       this.lastRunQuery = this.query
-      window.__aniani.setParams({ q: this.query })
+      const params = { q: this.query }
+      if (this.rangeStart && this.rangeEnd) {
+        params.start = this.rangeStart
+        params.end = this.rangeEnd
+      }
+      window.__aniani.setParams(params)
       try {
-        const endNs = String(Date.now() * 1_000_000)
-        const startNs = String(window.__aniani.hourAgoMs() * 1_000_000)
+        const startNs = this.rangeStart || String(window.__aniani.hourAgoMs() * 1_000_000)
+        const endNs = this.rangeEnd || String(Date.now() * 1_000_000)
         const url =
           '/loki/api/v1/query_range?query=' +
           encodeURIComponent(this.query) +
           '&start=' + startNs +
           '&end=' + endNs +
-          '&limit=200'
+          '&limit=' + this.limit
         const res = await window.__aniani.apiGet(url)
         const result = (res.data && res.data.result) || []
         const rows = []
         for (const stream of result) {
           const labels = Object.entries(stream.stream || {})
-            .map(([k, v]) => k + '=' + v)
-            .join(' ')
-          for (const [tsNs, line] of stream.values || []) {
+          for (const v of stream.values || []) {
             rows.push({
-              tsNs: Number(tsNs),
-              time: new Date(Number(tsNs) / 1_000_000).toISOString(),
+              tsNs: Number(v[0]),
+              time: window.__aniani.formatLocalTime(Number(v[0])),
               labels,
-              line,
+              line: v[1],
+              traceId: (v[2] && v[2].trace_id) || '',
             })
           }
         }
@@ -718,6 +800,7 @@ const Logs = {
         this.rows = rows
       } catch (e) {
         this.error = e.message
+        this.errorHint = e.hint || ''
       } finally {
         this.loading = false
       }
@@ -1061,7 +1144,7 @@ const App = {
 }
 
 // Export the shared helpers so later tasks can reference them within this file.
-window.__aniani = { apiGet, hourAgoMs, escLabel, vocab, loadVocab, loadCatalog, route, href, setParams }
+window.__aniani = { apiGet, hourAgoMs, formatLocalTime, escLabel, vocab, loadVocab, loadCatalog, route, href, setParams }
 
 loadVocab()
 syncFromLocation()

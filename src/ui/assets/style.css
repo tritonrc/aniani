@@ -342,3 +342,72 @@ header h1 { margin: 16px 0 8px; font-size: 20px; }
 }
 .tl-event { margin-bottom: 8px; }
 .tl-event-head { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* ---- Logs view: two-line rows, severity badge, clamp, error caret ---- */
+.log-rows {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+.log-row {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  border-left: 2px solid transparent;
+}
+.log-row.is-error { border-left-color: var(--error); }
+.log-line1 { display: flex; align-items: baseline; gap: 8px; }
+.log-line1 .ts { flex: 0 0 auto; color: var(--muted); white-space: nowrap; }
+.log-line1 .line { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; word-break: break-word; }
+.log-line1 .line.clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.log-line2 { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.lbl-chip {
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 5px;
+  font-size: 11px;
+}
+.show-more-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 2px 0 0;
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.sev {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.sev-error { color: var(--error); background: rgba(255, 107, 107, 0.12); }
+.sev-warn { color: #fed330; background: rgba(254, 211, 48, 0.12); }
+.sev-info { color: #778ca3; background: rgba(119, 140, 163, 0.12); }
+.sev-debug { color: var(--muted); background: rgba(125, 136, 150, 0.1); }
+.sev-none { color: var(--muted); background: none; }
+
+.load-more-row { margin-top: 10px; }
+
+.err-caret {
+  margin: 6px 0;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--error);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  overflow-x: auto;
+}
+.err-hint { margin-top: -4px; margin-bottom: 8px; }
