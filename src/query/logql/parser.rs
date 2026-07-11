@@ -95,8 +95,15 @@ pub fn parse_logql(input: &str) -> Result<LogQLExpr, LogQLParseError> {
     let input = input.trim();
 
     // Try metric query first
-    if let Ok((_, expr)) = parse_metric_query(input) {
-        return Ok(expr);
+    if let Ok((remaining, expr)) = parse_metric_query(input) {
+        let remaining = remaining.trim();
+        if remaining.is_empty() {
+            return Ok(expr);
+        }
+        return Err(LogQLParseError::Parse(format!(
+            "unexpected trailing input: {}",
+            remaining
+        )));
     }
 
     // Try pipeline or stream selector
@@ -522,5 +529,14 @@ mod tests {
             }
             _ => panic!("expected MetricQuery"),
         }
+    }
+
+    #[test]
+    fn test_metric_query_rejects_trailing_garbage() {
+        let result = parse_logql(r#"count_over_time({service="payments"}[5m]) extra junk"#);
+        assert!(
+            result.is_err(),
+            "trailing input after metric query must error"
+        );
     }
 }
