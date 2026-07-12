@@ -129,7 +129,10 @@ fn evaluate_metric_query(
             let mut numeric_min = f64::INFINITY;
             let mut numeric_max = f64::NEG_INFINITY;
 
-            for entry in entries.iter().filter(|e| apply_stages(&e.line, &stages)) {
+            for entry in entries
+                .iter()
+                .filter(|e| apply_stages(&e.line, &stages, &labels))
+            {
                 count += 1;
                 byte_sum += entry.line.len();
                 if let Ok(value) = entry.line.trim().parse::<f64>() {
@@ -248,9 +251,10 @@ fn evaluate_unlimited_stream_query(
         if entries.is_empty() {
             continue;
         }
+        let labels = store.get_stream_labels(sid).unwrap_or_default();
         let entry_tuples: Vec<ResolvedEntry> = entries
             .iter()
-            .filter(|e| apply_stages(&e.line, stages))
+            .filter(|e| apply_stages(&e.line, stages, &labels))
             .map(|e| {
                 let mut attrs: Vec<(String, String)> = e
                     .attributes
@@ -304,8 +308,9 @@ fn evaluate_limited_stream_query(
     let mut sequence = 0usize;
 
     for &sid in stream_ids {
+        let labels = store.get_stream_labels(sid).unwrap_or_default();
         for entry in store.get_entries(sid, start_ns, end_ns) {
-            if !apply_stages(&entry.line, stages) {
+            if !apply_stages(&entry.line, stages, &labels) {
                 continue;
             }
 
@@ -408,8 +413,14 @@ fn extract_selector_and_stages(
     }
 }
 
-fn apply_stages(line: &str, stages: &[PipelineStage]) -> bool {
+fn apply_stages(line: &str, stages: &[PipelineStage], stream_labels: &[(String, String)]) -> bool {
     let mut extracted: FxHashMap<String, String> = FxHashMap::default();
+    // Seed with the stream's own labels so that LabelFilter stages can match
+    // them even without a preceding | json / | logfmt extraction. This mirrors
+    // real Loki where stream labels are visible to pipeline label filters.
+    for (k, v) in stream_labels {
+        extracted.insert(k.clone(), v.clone());
+    }
     for stage in stages {
         match stage {
             PipelineStage::LineContains(pattern) => {
