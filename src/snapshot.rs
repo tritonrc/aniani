@@ -132,6 +132,7 @@ mod tests {
     use super::*;
     use crate::store::log_store::LogEntry;
     use crate::store::metric_store::Sample;
+    use smallvec::SmallVec;
     use tempfile::tempdir;
 
     #[test]
@@ -146,6 +147,8 @@ mod tests {
                 line: "hello".into(),
                 ingest_seq: 0,
                 trace_id: None,
+
+                attributes: SmallVec::new(),
             }],
         );
 
@@ -182,6 +185,8 @@ mod tests {
                 line: "hello".into(),
                 ingest_seq: 99,
                 trace_id: None,
+
+                attributes: SmallVec::new(),
             }],
         );
 

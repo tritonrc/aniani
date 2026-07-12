@@ -8,7 +8,7 @@ use axum::response::IntoResponse;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::eval::{LogQLResult, evaluate_logql_limited};
+use super::eval::{LogQLResult, ResolvedEntry, evaluate_logql_limited};
 use super::parser::parse_logql;
 use crate::store::SharedState;
 
@@ -242,24 +242,20 @@ fn format_logql_result(result: LogQLResult, limit: usize) -> Value {
             // timestamp descending (newest first), take `limit`, then redistribute.
             let total_entries: usize = streams.iter().map(|s| s.entries.len()).sum();
             if total_entries > limit {
-                let mut all: Vec<(usize, i64, String, Option<String>)> = streams
+                let mut all: Vec<(usize, ResolvedEntry)> = streams
                     .iter_mut()
                     .enumerate()
-                    .flat_map(|(idx, sr)| {
-                        sr.entries
-                            .drain(..)
-                            .map(move |(ts, line, trace_id)| (idx, ts, line, trace_id))
-                    })
+                    .flat_map(|(idx, sr)| sr.entries.drain(..).map(move |entry| (idx, entry)))
                     .collect();
-                all.sort_by_key(|b| std::cmp::Reverse(b.1)); // newest first
+                all.sort_by_key(|b| std::cmp::Reverse(b.1.0)); // newest first
                 all.truncate(limit);
                 // Put entries back into their streams
-                for (idx, ts, line, trace_id) in all {
-                    streams[idx].entries.push((ts, line, trace_id));
+                for (idx, entry) in all {
+                    streams[idx].entries.push(entry);
                 }
                 // Re-sort each stream's entries by timestamp ascending
                 for sr in &mut streams {
-                    sr.entries.sort_by_key(|(ts, _, _)| *ts);
+                    sr.entries.sort_by_key(|(ts, _, _, _)| *ts);
                 }
             }
 
@@ -278,9 +274,17 @@ fn format_logql_result(result: LogQLResult, limit: usize) -> Value {
                     let values: Vec<Value> = sr
                         .entries
                         .into_iter()
-                        .map(|(ts, line, trace_id)| match trace_id {
-                            Some(tid) => json!([ts.to_string(), line, {"trace_id": tid}]),
-                            None => json!([ts.to_string(), line]),
+                        .map(|(ts, line, trace_id, attrs)| {
+                            let metadata: serde_json::Map<String, Value> = trace_id
+                                .iter()
+                                .map(|tid| ("trace_id".to_string(), Value::String(tid.clone())))
+                                .chain(attrs.into_iter().map(|(k, v)| (k, Value::String(v))))
+                                .collect();
+                            if metadata.is_empty() {
+                                json!([ts.to_string(), line])
+                            } else {
+                                json!([ts.to_string(), line, metadata])
+                            }
                         })
                         .collect();
                     json!({

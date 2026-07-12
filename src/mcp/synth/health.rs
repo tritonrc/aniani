@@ -144,6 +144,7 @@ mod tests {
     use super::*;
     use crate::store::empty_test_state as state;
     use crate::store::log_store::LogEntry;
+    use smallvec::SmallVec;
 
     #[test]
     fn check_health_lists_services_worst_first() {
@@ -157,6 +158,8 @@ mod tests {
                     line: "ok".into(),
                     ingest_seq: 0,
                     trace_id: None,
+
+                    attributes: SmallVec::new(),
                 }],
             );
             logs.ingest_stream(
@@ -169,6 +172,8 @@ mod tests {
                     line: "err".into(),
                     ingest_seq: 1,
                     trace_id: None,
+
+                    attributes: SmallVec::new(),
                 }],
             );
         }

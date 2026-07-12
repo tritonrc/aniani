@@ -20,13 +20,16 @@ pub enum LogQLResult {
     Matrix(Vec<MetricResult>),
 }
 
+/// A resolved log entry tuple: `(timestamp_ns, line, trace_id, attributes)`.
+/// `trace_id` is `Some` only for OTLP-origin entries that carried a non-empty
+/// trace id. `attributes` are resolved per-entry structured attributes.
+pub type ResolvedEntry = (i64, String, Option<String>, Vec<(String, String)>);
+
 /// A single stream result with entries.
 #[derive(Debug)]
 pub struct StreamResult {
     pub labels: Vec<(String, String)>,
-    /// `(timestamp_ns, line, trace_id)`. `trace_id` is `Some` only for
-    /// OTLP-origin entries that carried a non-empty trace id.
-    pub entries: Vec<(i64, String, Option<String>)>,
+    pub entries: Vec<ResolvedEntry>,
 }
 
 /// A single metric result (from count_over_time, rate, etc.).
@@ -239,10 +242,22 @@ fn evaluate_unlimited_stream_query(
         if entries.is_empty() {
             continue;
         }
-        let entry_tuples: Vec<(i64, String, Option<String>)> = entries
+        let entry_tuples: Vec<ResolvedEntry> = entries
             .iter()
             .filter(|e| apply_stages(&e.line, stages))
-            .map(|e| (e.timestamp_ns, e.line.clone(), e.trace_id.clone()))
+            .map(|e| {
+                let attrs: Vec<(String, String)> = e
+                    .attributes
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            store.interner.resolve(k).to_string(),
+                            store.resolve_attribute_value(v),
+                        )
+                    })
+                    .collect();
+                (e.timestamp_ns, e.line.clone(), e.trace_id.clone(), attrs)
+            })
             .collect();
         if entry_tuples.is_empty() {
             continue;
@@ -276,7 +291,7 @@ fn evaluate_limited_stream_query(
             let should_insert = newest.len() < limit
                 || newest
                     .peek()
-                    .map(|Reverse((oldest_ts, _, _, _, _))| entry.timestamp_ns > *oldest_ts)
+                    .map(|Reverse((oldest_ts, _, _, _, _, _))| entry.timestamp_ns > *oldest_ts)
                     .unwrap_or(false);
             if !should_insert {
                 continue;
@@ -292,17 +307,27 @@ fn evaluate_limited_stream_query(
                 sid,
                 entry.line.clone(),
                 entry.trace_id.clone(),
+                entry
+                    .attributes
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            store.interner.resolve(k).to_string(),
+                            store.resolve_attribute_value(v),
+                        )
+                    })
+                    .collect(),
             )));
             sequence = sequence.wrapping_add(1);
         }
     }
 
-    let mut grouped: FxHashMap<u64, Vec<(i64, String, Option<String>)>> = FxHashMap::default();
-    for Reverse((timestamp_ns, _, sid, line, trace_id)) in newest {
+    let mut grouped: FxHashMap<u64, Vec<ResolvedEntry>> = FxHashMap::default();
+    for Reverse((timestamp_ns, _, sid, line, trace_id, attrs)) in newest {
         grouped
             .entry(sid)
             .or_default()
-            .push((timestamp_ns, line, trace_id));
+            .push((timestamp_ns, line, trace_id, attrs));
     }
 
     let mut result_stream_ids: Vec<u64> = grouped.keys().copied().collect();
@@ -313,7 +338,7 @@ fn evaluate_limited_stream_query(
         let Some(mut entries) = grouped.remove(&sid) else {
             continue;
         };
-        entries.sort_by_key(|(timestamp_ns, _, _)| *timestamp_ns);
+        entries.sort_by_key(|(timestamp_ns, _, _, _)| *timestamp_ns);
         let labels = store.get_stream_labels(sid).unwrap_or_default();
         results.push(StreamResult { labels, entries });
     }

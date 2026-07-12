@@ -7,6 +7,8 @@ fn make_entry(ts: i64, line: &str) -> LogEntry {
         line: line.to_string(),
         ingest_seq: 0,
         trace_id: None,
+
+        attributes: SmallVec::new(),
     }
 }
 
@@ -291,6 +293,8 @@ fn test_internally_unsorted_batch_after_tail() {
             line: "a".into(),
             ingest_seq: 0,
             trace_id: None,
+
+            attributes: SmallVec::new(),
         }],
     );
     // Append internally unsorted batch — all > 100
@@ -302,12 +306,16 @@ fn test_internally_unsorted_batch_after_tail() {
                 line: "c".into(),
                 ingest_seq: 0,
                 trace_id: None,
+
+                attributes: SmallVec::new(),
             },
             LogEntry {
                 timestamp_ns: 200,
                 line: "b".into(),
                 ingest_seq: 0,
                 trace_id: None,
+
+                attributes: SmallVec::new(),
             },
         ],
     );

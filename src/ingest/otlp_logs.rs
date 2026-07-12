@@ -10,11 +10,13 @@ use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
 use opentelemetry_proto::tonic::common::v1::any_value;
 use prost::Message;
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 use std::sync::atomic::Ordering;
 
-use super::label::{extract_key_values, extract_resource_labels, promote_service_name};
+use super::label::{extract_resource_labels, promote_service_name};
 use super::{decode_body, is_json_content_type, u64_to_i64_saturating};
 use crate::store::log_store::LogEntry;
+use crate::store::trace_store::AttributeValue;
 use crate::store::{AppState, SharedState};
 
 /// Handler for POST /v1/logs.
@@ -62,7 +64,11 @@ pub fn ingest_logs(state: &AppState, request: ExportLogsServiceRequest) -> usize
     // share an identical label set so each stream receives one batched
     // `ingest_stream` call rather than N single-entry calls (which would make
     // the per-append sort check quadratic for a busy stream).
-    type LogBatch = (Vec<(String, String)>, Vec<LogEntry>);
+    //
+    // Per-entry OTLP attributes are captured as typed data alongside each
+    // entry (not promoted to stream labels), preventing cardinality explosion.
+    type RawAttr = (String, PreparedLogAttr);
+    type LogBatch = (Vec<(String, String)>, Vec<(LogEntry, Vec<RawAttr>)>);
     let mut grouped: Vec<LogBatch> = Vec::new();
     let mut key_index: FxHashMap<Vec<(String, String)>, usize> = FxHashMap::default();
 
@@ -72,21 +78,19 @@ pub fn ingest_logs(state: &AppState, request: ExportLogsServiceRequest) -> usize
 
         for scope_logs in &resource_logs.scope_logs {
             for log_record in &scope_logs.log_records {
+                // Stream labels: resource attrs + severity-derived level only.
+                // Per-entry attributes are NOT promoted (avoids cardinality
+                // explosion).
                 let mut labels = resource_labels.clone();
-
-                // Map severity number to a "level" label.
                 let level = severity_to_level(log_record.severity_number);
                 labels.push(("level".to_string(), level.to_string()));
 
-                // Promote log record attributes to labels, mirroring the
-                // metrics path, so they are queryable via LogQL label matchers
-                // (and visible to describe_service). Skip keys that collide
-                // with an already-set label (e.g. service/level/resource attrs).
-                for (k, v) in extract_key_values(&log_record.attributes) {
-                    if !labels.iter().any(|(ek, _)| *ek == k) {
-                        labels.push((k, v));
-                    }
-                }
+                // Capture per-entry typed attributes.
+                let raw_attrs: Vec<RawAttr> = log_record
+                    .attributes
+                    .iter()
+                    .filter_map(|kv| convert_any_value(&kv.value).map(|v| (kv.key.clone(), v)))
+                    .collect();
 
                 // Extract the log line from the body field.
                 let line = match &log_record.body {
@@ -105,23 +109,40 @@ pub fn ingest_logs(state: &AppState, request: ExportLogsServiceRequest) -> usize
                     line,
                     ingest_seq: state.ingest_seq.fetch_add(1, Ordering::Relaxed),
                     trace_id: trace_id_hex(&log_record.trace_id),
+                    attributes: SmallVec::new(),
                 };
 
                 match key_index.get(&labels).copied() {
-                    Some(idx) => grouped[idx].1.push(entry),
+                    Some(idx) => grouped[idx].1.push((entry, raw_attrs)),
                     None => {
                         key_index.insert(labels.clone(), grouped.len());
-                        grouped.push((labels, vec![entry]));
+                        grouped.push((labels, vec![(entry, raw_attrs)]));
                     }
                 }
             }
         }
     }
 
-    // Acquire write lock and ingest.
+    // Acquire write lock and ingest. Intern per-entry attributes inside the
+    // lock since the interner lives behind the RwLock.
     let entry_count: usize = grouped.iter().map(|(_, e)| e.len()).sum();
     let mut store = state.log_store.write();
-    for (labels, entries) in grouped {
+    for (labels, mut entries) in grouped {
+        for (entry, raw_attrs) in entries.iter_mut() {
+            for (key, val) in raw_attrs.drain(..) {
+                let key_spur = store.interner.get_or_intern(key);
+                let attr_val = match val {
+                    PreparedLogAttr::String(s) => {
+                        AttributeValue::String(store.interner.get_or_intern(s))
+                    }
+                    PreparedLogAttr::Int(i) => AttributeValue::Int(i),
+                    PreparedLogAttr::Float(f) => AttributeValue::Float(f),
+                    PreparedLogAttr::Bool(b) => AttributeValue::Bool(b),
+                };
+                entry.attributes.push((key_spur, attr_val));
+            }
+        }
+        let entries: Vec<LogEntry> = entries.into_iter().map(|(e, _)| e).collect();
         store.ingest_stream(labels, entries);
     }
 
@@ -170,6 +191,32 @@ fn severity_to_level(severity_number: i32) -> &'static str {
         17..=20 => "error",
         21..=24 => "fatal",
         _ => "unknown",
+    }
+}
+
+/// Owned representation of an OTLP attribute value for pre-lock preparation.
+/// Interned into `AttributeValue` inside the write lock.
+enum PreparedLogAttr {
+    String(String),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+}
+
+/// Convert an OTLP `AnyValue` into a `PreparedLogAttr`. Returns `None` for
+/// complex types (Array, Kvlist, Bytes) — these are stringified into the log
+/// `line` instead of being stored as structured attributes.
+fn convert_any_value(
+    val: &Option<opentelemetry_proto::tonic::common::v1::AnyValue>,
+) -> Option<PreparedLogAttr> {
+    let val = val.as_ref()?;
+    match &val.value {
+        Some(any_value::Value::StringValue(s)) => Some(PreparedLogAttr::String(s.clone())),
+        Some(any_value::Value::IntValue(i)) => Some(PreparedLogAttr::Int(*i)),
+        Some(any_value::Value::DoubleValue(f)) => Some(PreparedLogAttr::Float(*f)),
+        Some(any_value::Value::BoolValue(b)) => Some(PreparedLogAttr::Bool(*b)),
+        // Complex types are stringified into the body, not stored as attrs.
+        _ => None,
     }
 }
 
@@ -267,7 +314,8 @@ mod ingest_seq_tests {
     }
 
     #[test]
-    fn log_record_attributes_become_queryable_labels() {
+    fn log_record_attributes_stored_per_entry_not_as_labels() {
+        use crate::store::trace_store::AttributeValue;
         use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
         let st = state();
         let mut req = one_log("boom");
@@ -278,24 +326,21 @@ mod ingest_seq_tests {
                     value: Some(any_value::Value::StringValue("POST".into())),
                 }),
             },
-            // Collision with the severity-derived "level" label: must be ignored.
             KeyValue {
-                key: "level".into(),
+                key: "status_code".into(),
                 value: Some(AnyValue {
-                    value: Some(any_value::Value::StringValue("debug".into())),
+                    value: Some(any_value::Value::IntValue(500)),
                 }),
             },
         ];
         ingest_logs(&st, req);
 
         let store = st.log_store.read();
-        // The stream labels should now include http.method=POST (queryable via
-        // LogQL label matchers) but keep level=info from the severity mapping.
-        let labels: Vec<(String, String)> = store
-            .streams
-            .values()
-            .next()
-            .unwrap()
+        let stream = store.streams.values().next().unwrap();
+
+        // Stream labels should include only resource attrs + level — NOT
+        // per-entry attributes like http.method or status_code.
+        let labels: Vec<(String, String)> = stream
             .labels
             .iter()
             .map(|(k, v)| {
@@ -305,13 +350,29 @@ mod ingest_seq_tests {
                 )
             })
             .collect();
-        assert!(
-            labels
-                .iter()
-                .any(|(k, v)| k == "http.method" && v == "POST")
-        );
+        assert!(!labels.iter().any(|(k, _)| k == "http.method"));
+        assert!(!labels.iter().any(|(k, _)| k == "status_code"));
         assert!(labels.iter().any(|(k, v)| k == "level" && v == "info"));
-        assert!(!labels.iter().any(|(k, v)| k == "level" && v == "debug"));
+
+        // Per-entry attributes should carry the typed values.
+        let entry = &stream.entries[0];
+        let get_attr = |key: &str| -> Option<&AttributeValue> {
+            entry
+                .attributes
+                .iter()
+                .find(|(k, _)| store.interner.resolve(k) == key)
+                .map(|(_, v)| v)
+        };
+        match get_attr("http.method") {
+            Some(AttributeValue::String(s)) => {
+                assert_eq!(store.interner.resolve(s), "POST");
+            }
+            other => panic!("expected String attribute, got {other:?}"),
+        }
+        match get_attr("status_code") {
+            Some(AttributeValue::Int(i)) => assert_eq!(*i, 500),
+            other => panic!("expected Int attribute, got {other:?}"),
+        }
     }
 
     #[test]

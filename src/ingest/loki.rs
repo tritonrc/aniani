@@ -8,6 +8,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::Deserialize;
+use smallvec::SmallVec;
 
 use crate::store::SharedState;
 use crate::store::log_store::LogEntry;
@@ -181,6 +182,7 @@ fn ingest_loki_push(state: &SharedState, request: LokiPushRequest) -> (usize, us
                             .ingest_seq
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                         trace_id: None,
+                        attributes: SmallVec::new(),
                     })
                 })
                 .collect();

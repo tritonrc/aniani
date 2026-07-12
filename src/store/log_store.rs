@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 use super::posting_list::PostingList;
+use super::trace_store::AttributeValue;
 use super::{LabelMatcher, LabelPairs};
 
 /// A single log entry with nanosecond timestamp.
@@ -22,6 +23,11 @@ pub struct LogEntry {
     /// Lowercase hex trace id from OTLP logs; `None` for Loki-push entries.
     #[serde(default)]
     pub trace_id: Option<String>,
+    /// Per-entry structured attributes (typed, interned). OTLP
+    /// `LogRecord.attributes` land here instead of being promoted to stream
+    /// labels, avoiding cardinality explosion from high-cardinality keys.
+    #[serde(default)]
+    pub attributes: SmallVec<[(Spur, AttributeValue); 8]>,
 }
 
 /// A log stream identified by a set of labels.
@@ -173,6 +179,45 @@ impl LogStore {
                 })
                 .collect()
         })
+    }
+
+    /// Resolve an `AttributeValue` to its display string using the interner.
+    pub fn resolve_attribute_value(&self, val: &AttributeValue) -> String {
+        match val {
+            AttributeValue::String(s) => self.interner.resolve(s).to_string(),
+            AttributeValue::Int(i) => i.to_string(),
+            AttributeValue::Float(f) => f.to_string(),
+            AttributeValue::Bool(b) => b.to_string(),
+            AttributeValue::Array(items) => {
+                let parts: Vec<String> = items
+                    .iter()
+                    .map(|v| self.resolve_attribute_value(v))
+                    .collect();
+                format!("[{}]", parts.join(", "))
+            }
+            AttributeValue::Bytes(b) => {
+                use std::fmt::Write;
+                let mut hex = String::with_capacity(b.len() * 2 + 2);
+                let _ = write!(hex, "0x");
+                for byte in b {
+                    let _ = write!(hex, "{byte:02x}");
+                }
+                hex
+            }
+            AttributeValue::KeyValueList(pairs) => {
+                let parts: Vec<String> = pairs
+                    .iter()
+                    .map(|(k, v)| {
+                        format!(
+                            "{}={}",
+                            self.interner.resolve(k),
+                            self.resolve_attribute_value(v)
+                        )
+                    })
+                    .collect();
+                format!("{{{}}}", parts.join(", "))
+            }
+        }
     }
 
     /// Get all label names.
@@ -330,6 +375,8 @@ impl LogStore {
             // Actual string data in each entry (heap allocation beyond LogEntry struct)
             for entry in &stream.entries {
                 bytes += entry.line.capacity();
+                // Per-entry attributes: each (Spur, AttributeValue) pair
+                bytes += entry.attributes.len() * std::mem::size_of::<(Spur, AttributeValue)>();
             }
         }
 
