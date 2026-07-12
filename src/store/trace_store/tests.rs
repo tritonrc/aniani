@@ -492,3 +492,32 @@ fn test_evict_partial_cleans_stale_indexes() {
     // New span should still be indexed
     assert!(store.name_index.contains_key(&new_name));
 }
+
+#[test]
+fn resolve_attribute_value_renders_array_bytes_kvlist() {
+    let mut store = TraceStore::new();
+    let s = store.interner.get_or_intern("green");
+    let k = store.interner.get_or_intern("host");
+
+    let array = AttributeValue::Array(vec![
+        AttributeValue::String(s),
+        AttributeValue::Int(7),
+        AttributeValue::Bool(true),
+    ]);
+    assert_eq!(store.resolve_attribute_value(&array), "[green, 7, true]");
+
+    let bytes = AttributeValue::Bytes(vec![0xde, 0xad, 0xbe, 0xef]);
+    assert_eq!(store.resolve_attribute_value(&bytes), "0xdeadbeef");
+
+    let kvlist = AttributeValue::KeyValueList(vec![
+        (k, AttributeValue::String(s)),
+        (
+            store.interner.get_or_intern("port"),
+            AttributeValue::Int(8080),
+        ),
+    ]);
+    assert_eq!(
+        store.resolve_attribute_value(&kvlist),
+        "{host=green, port=8080}"
+    );
+}

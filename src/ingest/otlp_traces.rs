@@ -8,7 +8,6 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
-use opentelemetry_proto::tonic::common::v1::any_value;
 use prost::Message;
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
@@ -32,6 +31,9 @@ enum PreparedAttributeValue {
     Int(i64),
     Float(f64),
     Bool(bool),
+    Array(Vec<PreparedAttributeValue>),
+    Bytes(Vec<u8>),
+    KeyValueList(Vec<(String, PreparedAttributeValue)>),
 }
 
 /// Prepared (pre-intern) attribute pairs.
@@ -330,11 +332,25 @@ pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> Tr
 fn convert_any_value(
     val: &opentelemetry_proto::tonic::common::v1::AnyValue,
 ) -> Option<PreparedAttributeValue> {
+    use opentelemetry_proto::tonic::common::v1::any_value::Value;
     match &val.value {
-        Some(any_value::Value::StringValue(s)) => Some(PreparedAttributeValue::String(s.clone())),
-        Some(any_value::Value::IntValue(i)) => Some(PreparedAttributeValue::Int(*i)),
-        Some(any_value::Value::DoubleValue(f)) => Some(PreparedAttributeValue::Float(*f)),
-        Some(any_value::Value::BoolValue(b)) => Some(PreparedAttributeValue::Bool(*b)),
+        Some(Value::StringValue(s)) => Some(PreparedAttributeValue::String(s.clone())),
+        Some(Value::IntValue(i)) => Some(PreparedAttributeValue::Int(*i)),
+        Some(Value::DoubleValue(f)) => Some(PreparedAttributeValue::Float(*f)),
+        Some(Value::BoolValue(b)) => Some(PreparedAttributeValue::Bool(*b)),
+        Some(Value::BytesValue(b)) => Some(PreparedAttributeValue::Bytes(b.clone())),
+        Some(Value::ArrayValue(arr)) => Some(PreparedAttributeValue::Array(
+            arr.values.iter().filter_map(convert_any_value).collect(),
+        )),
+        Some(Value::KvlistValue(kv)) => Some(PreparedAttributeValue::KeyValueList(
+            kv.values
+                .iter()
+                .filter_map(|entry| {
+                    let val = convert_any_value(entry.value.as_ref()?)?;
+                    Some((entry.key.clone(), val))
+                })
+                .collect(),
+        )),
         _ => None,
     }
 }
@@ -445,21 +461,41 @@ fn intern_prepared_span(
 }
 
 /// Intern a single prepared attribute key/value pair against the store.
+/// Recursively interns string data inside arrays and key-value lists.
 fn intern_attribute(
     store: &mut crate::store::TraceStore,
     key: String,
     value: PreparedAttributeValue,
 ) -> (lasso::Spur, AttributeValue) {
     let key = store.interner.get_or_intern(key);
-    let value = match value {
+    let value = intern_value(store, value);
+    (key, value)
+}
+
+/// Intern a [`PreparedAttributeValue`] into its stored [`AttributeValue`],
+/// interning any nested string-like data.
+fn intern_value(
+    store: &mut crate::store::TraceStore,
+    value: PreparedAttributeValue,
+) -> AttributeValue {
+    match value {
         PreparedAttributeValue::String(s) => {
             AttributeValue::String(store.interner.get_or_intern(s))
         }
         PreparedAttributeValue::Int(i) => AttributeValue::Int(i),
         PreparedAttributeValue::Float(f) => AttributeValue::Float(f),
         PreparedAttributeValue::Bool(b) => AttributeValue::Bool(b),
-    };
-    (key, value)
+        PreparedAttributeValue::Bytes(b) => AttributeValue::Bytes(b),
+        PreparedAttributeValue::Array(items) => {
+            AttributeValue::Array(items.into_iter().map(|v| intern_value(store, v)).collect())
+        }
+        PreparedAttributeValue::KeyValueList(pairs) => AttributeValue::KeyValueList(
+            pairs
+                .into_iter()
+                .map(|(k, v)| (store.interner.get_or_intern(k), intern_value(store, v)))
+                .collect(),
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -618,6 +654,98 @@ mod tests {
         match attrs.get("scope.name") {
             Some(AttributeValue::String(s)) => assert_eq!(store.resolve(s), "io.opentelemetry.sdk"),
             other => panic!("scope.name wrong shape: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn array_bytes_kvlist_attribute_values_are_captured() {
+        use opentelemetry_proto::tonic::common::v1::{
+            AnyValue, ArrayValue, KeyValue, KeyValueList, any_value,
+        };
+
+        let state = empty_test_state();
+        let req = ExportTraceServiceRequest {
+            resource_spans: vec![ResourceSpans {
+                resource: Some(Resource::default()),
+                scope_spans: vec![ScopeSpans {
+                    spans: vec![Span {
+                        trace_id: vec![1; 16],
+                        span_id: vec![2; 8],
+                        attributes: vec![
+                            KeyValue {
+                                key: "tags".into(),
+                                value: Some(AnyValue {
+                                    value: Some(any_value::Value::ArrayValue(ArrayValue {
+                                        values: vec![
+                                            AnyValue {
+                                                value: Some(any_value::Value::StringValue(
+                                                    "a".into(),
+                                                )),
+                                            },
+                                            AnyValue {
+                                                value: Some(any_value::Value::IntValue(3)),
+                                            },
+                                        ],
+                                    })),
+                                }),
+                            },
+                            KeyValue {
+                                key: "raw".into(),
+                                value: Some(AnyValue {
+                                    value: Some(any_value::Value::BytesValue(vec![0xca, 0xfe])),
+                                }),
+                            },
+                            KeyValue {
+                                key: "meta".into(),
+                                value: Some(AnyValue {
+                                    value: Some(any_value::Value::KvlistValue(KeyValueList {
+                                        values: vec![KeyValue {
+                                            key: "env".into(),
+                                            value: Some(AnyValue {
+                                                value: Some(any_value::Value::StringValue(
+                                                    "staging".into(),
+                                                )),
+                                            }),
+                                        }],
+                                    })),
+                                }),
+                            },
+                        ],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+        };
+        ingest_traces(&state, req);
+        let store = state.trace_store.read();
+        let spans = store.get_trace(&[1u8; 16]).unwrap();
+        let get = |key: &str| -> Option<&AttributeValue> {
+            spans[0]
+                .attributes
+                .iter()
+                .find(|(k, _)| store.resolve(k) == key)
+                .map(|(_, v)| v)
+        };
+        match get("span.tags") {
+            Some(AttributeValue::Array(items)) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(store.resolve_attribute_value(&items[1]), "3");
+            }
+            other => panic!("array value wrong shape: {other:?}"),
+        }
+        match get("span.raw") {
+            Some(AttributeValue::Bytes(b)) => assert_eq!(b, &vec![0xca, 0xfe]),
+            other => panic!("bytes value wrong shape: {other:?}"),
+        }
+        match get("span.meta") {
+            Some(AttributeValue::KeyValueList(pairs)) => {
+                assert_eq!(pairs.len(), 1);
+                assert_eq!(store.resolve(&pairs[0].0), "env");
+                assert_eq!(store.resolve_attribute_value(&pairs[0].1), "staging");
+            }
+            other => panic!("kvlist value wrong shape: {other:?}"),
         }
     }
 }

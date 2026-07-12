@@ -55,12 +55,19 @@ impl SpanKind {
 }
 
 /// Attribute value types.
+///
+/// Covers all OTLP `AnyValue` variants: the four scalars plus `ArrayValue`,
+/// `BytesValue`, and `KeyValueList`. String-like data (including array/kvlist
+/// element strings and keys) is interned.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AttributeValue {
     String(Spur),
     Int(i64),
     Float(f64),
     Bool(bool),
+    Array(Vec<AttributeValue>),
+    Bytes(Vec<u8>),
+    KeyValueList(Vec<(Spur, AttributeValue)>),
 }
 
 /// (name, status, service) keys snapshot used during targeted index
@@ -234,6 +241,32 @@ impl TraceStore {
             AttributeValue::Int(i) => i.to_string(),
             AttributeValue::Float(f) => f.to_string(),
             AttributeValue::Bool(b) => b.to_string(),
+            AttributeValue::Array(items) => format!(
+                "[{}]",
+                items
+                    .iter()
+                    .map(|v| self.resolve_attribute_value(v))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            AttributeValue::Bytes(b) => format!(
+                "0x{}",
+                b.iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            ),
+            AttributeValue::KeyValueList(pairs) => format!(
+                "{{{}}}",
+                pairs
+                    .iter()
+                    .map(|(k, v)| format!(
+                        "{}={}",
+                        self.interner.resolve(k),
+                        self.resolve_attribute_value(v)
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         }
     }
 
