@@ -71,6 +71,10 @@ struct PreparedSpan {
     ingest_seq: u64,
 }
 
+/// One instrumentation-scope group: its prepared attributes and the spans
+/// emitted under that scope.
+type PreparedScopeGroup = (PreparedAttrs, Vec<PreparedSpan>);
+
 /// Handler for POST /v1/traces.
 ///
 /// Accepts both protobuf (`application/x-protobuf`, default) and JSON
@@ -122,9 +126,10 @@ pub async fn traces_handler(
 /// service. Returns accepted trace/span counts.
 pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> TracesAccepted {
     // Each batch pairs one resource group's prepared resource attributes with
-    // its spans. Resource attributes are prepared once per group (not cloned
-    // per span) and interned once under the write lock.
-    let mut prepared_batches: Vec<(PreparedAttrs, Vec<PreparedSpan>)> = Vec::new();
+    // its scope groups. Each scope group pairs its own scope attributes with
+    // the prepared spans. Both resource and scope attributes are prepared once
+    // per group (not cloned per span) and interned once under the write lock.
+    let mut prepared_batches: Vec<(PreparedAttrs, Vec<PreparedScopeGroup>)> = Vec::new();
     let mut trace_ids = FxHashSet::default();
     let mut total_spans: usize = 0;
 
@@ -145,8 +150,10 @@ pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> Tr
             })
             .collect();
 
-        let mut spans = Vec::new();
+        let mut scope_groups: Vec<(PreparedAttrs, Vec<PreparedSpan>)> = Vec::new();
         for scope_spans in &resource_spans.scope_spans {
+            let scope_attrs = prepare_scope_attrs(&scope_spans.scope);
+            let mut spans = Vec::new();
             for otlp_span in &scope_spans.spans {
                 let trace_id: [u8; 16] = match otlp_span.trace_id.as_slice().try_into() {
                     Ok(id) if id != [0u8; 16] => id,
@@ -284,24 +291,34 @@ pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> Tr
                     ingest_seq: state.ingest_seq.fetch_add(1, Ordering::Relaxed),
                 });
             }
+            total_spans += spans.len();
+            scope_groups.push((scope_attrs, spans));
         }
 
-        total_spans += spans.len();
-        prepared_batches.push((resource_attrs, spans));
+        prepared_batches.push((resource_attrs, scope_groups));
     }
 
     let mut store = state.trace_store.write();
-    for (resource_attrs, prepared_batch) in prepared_batches {
+    for (resource_attrs, scope_groups) in prepared_batches {
         // Intern resource attributes once for the whole batch.
         let resource_spurs: SmallVec<[(lasso::Spur, AttributeValue); 8]> = resource_attrs
             .into_iter()
             .map(|(key, value)| intern_attribute(&mut store, key, value))
             .collect();
-        let spans: Vec<Span> = prepared_batch
-            .into_iter()
-            .map(|prepared| intern_prepared_span(&mut store, prepared, &resource_spurs))
-            .collect();
-        store.ingest_spans(spans);
+        for (scope_attrs, prepared_batch) in scope_groups {
+            // Intern scope attributes once per scope group.
+            let scope_spurs: SmallVec<[(lasso::Spur, AttributeValue); 8]> = scope_attrs
+                .into_iter()
+                .map(|(key, value)| intern_attribute(&mut store, key, value))
+                .collect();
+            let spans: Vec<Span> = prepared_batch
+                .into_iter()
+                .map(|prepared| {
+                    intern_prepared_span(&mut store, prepared, &resource_spurs, &scope_spurs)
+                })
+                .collect();
+            store.ingest_spans(spans);
+        }
     }
 
     TracesAccepted {
@@ -322,17 +339,54 @@ fn convert_any_value(
     }
 }
 
+/// Extract OTLP `InstrumentationScope` fields as `scope.*` attribute pairs.
+///
+/// `scope.name` and `scope.version` are emitted only when non-empty; scope
+/// attributes are namespaced as `scope.<key>`. Mirrors the `resource.*`
+/// convention so scope is queryable via TraceQL without a dedicated field.
+fn prepare_scope_attrs(
+    scope: &Option<opentelemetry_proto::tonic::common::v1::InstrumentationScope>,
+) -> PreparedAttrs {
+    let Some(scope) = scope.as_ref() else {
+        return SmallVec::new();
+    };
+    let mut attrs: PreparedAttrs = SmallVec::new();
+    if !scope.name.is_empty() {
+        attrs.push((
+            "scope.name".to_string(),
+            PreparedAttributeValue::String(scope.name.clone()),
+        ));
+    }
+    if !scope.version.is_empty() {
+        attrs.push((
+            "scope.version".to_string(),
+            PreparedAttributeValue::String(scope.version.clone()),
+        ));
+    }
+    for attr in &scope.attributes {
+        if let Some(val) = attr.value.as_ref()
+            && let Some(av) = convert_any_value(val)
+        {
+            let key = format!("scope.{}", attr.key);
+            attrs.push((key, av));
+        }
+    }
+    attrs
+}
+
 fn intern_prepared_span(
     store: &mut crate::store::TraceStore,
     prepared: PreparedSpan,
     resource_spurs: &SmallVec<[(lasso::Spur, AttributeValue); 8]>,
+    scope_spurs: &SmallVec<[(lasso::Spur, AttributeValue); 8]>,
 ) -> Span {
     let name = store.interner.get_or_intern(&prepared.name);
     let service_name = store.interner.get_or_intern(&prepared.service_name);
-    // Resource attributes (interned once per resource group) are prepended; the
-    // per-span clone is cheap Spur pairs (no String allocation). Span-specific
-    // attributes are interned here.
+    // Resource and scope attributes (interned once per group) are prepended;
+    // the per-span clone is cheap Spur pairs (no String allocation). Span-
+    // specific attributes are interned here.
     let mut attributes = resource_spurs.clone();
+    attributes.extend(scope_spurs.iter().cloned());
     attributes.extend(
         prepared
             .attributes
@@ -516,5 +570,54 @@ mod tests {
         let (k, v) = &link.attributes[0];
         assert_eq!(store.resolve(k), "link.cause");
         assert_eq!(store.resolve_attribute_value(v), "retry");
+    }
+
+    #[test]
+    fn instrumentation_scope_is_promoted_to_scope_attrs() {
+        use opentelemetry_proto::tonic::common::v1::{
+            AnyValue, InstrumentationScope, KeyValue, any_value,
+        };
+
+        let state = empty_test_state();
+        let req = ExportTraceServiceRequest {
+            resource_spans: vec![ResourceSpans {
+                resource: Some(Resource::default()),
+                scope_spans: vec![ScopeSpans {
+                    scope: Some(InstrumentationScope {
+                        name: "io.opentelemetry.sdk".into(),
+                        version: "1.30.0".into(),
+                        attributes: vec![KeyValue {
+                            key: "scope.attr".into(),
+                            value: Some(AnyValue {
+                                value: Some(any_value::Value::StringValue("yes".into())),
+                            }),
+                        }],
+                        ..Default::default()
+                    }),
+                    spans: vec![Span {
+                        trace_id: vec![1; 16],
+                        span_id: vec![2; 8],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+        };
+        ingest_traces(&state, req);
+        let store = state.trace_store.read();
+        let spans = store.get_trace(&[1u8; 16]).unwrap();
+        let attrs: std::collections::HashMap<&str, &AttributeValue> = spans[0]
+            .attributes
+            .iter()
+            .map(|(k, v)| (store.resolve(k) as &str, v))
+            .collect();
+        assert!(attrs.contains_key("scope.name"));
+        assert!(attrs.contains_key("scope.version"));
+        assert!(attrs.contains_key("scope.scope.attr"));
+        match attrs.get("scope.name") {
+            Some(AttributeValue::String(s)) => assert_eq!(store.resolve(s), "io.opentelemetry.sdk"),
+            other => panic!("scope.name wrong shape: {other:?}"),
+        }
     }
 }
