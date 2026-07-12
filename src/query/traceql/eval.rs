@@ -138,9 +138,16 @@ fn eval_span_selector(
     // Pre-compile regex patterns once, indexed by condition position.
     let compiled_regexes = precompile_regexes(conditions);
 
+    // Narrow the candidate trace set using the service/name/status indexes.
+    // Only valid under pure conjunction (no OR): index intersection assumes
+    // every narrowed condition must hold. Neq and regex conditions are never
+    // indexable, so they simply don't contribute and force a full per-span
+    // check (which still runs for correctness on the narrowed traces).
+    let candidate_ids = candidate_trace_ids(conditions, logical_ops, store);
+
     let mut results: Vec<TraceResult> = Vec::new();
 
-    for (trace_id, spans) in &store.traces {
+    let mut scan = |spans: &Vec<Span>, trace_id: [u8; 16]| {
         let matched: Vec<MatchedSpan> = spans
             .iter()
             .filter(|span| {
@@ -151,15 +158,93 @@ fn eval_span_selector(
 
         if !matched.is_empty() {
             results.push(TraceResult {
-                trace_id: *trace_id,
+                trace_id,
                 matched_spans: matched,
             });
+        }
+    };
+
+    match candidate_ids {
+        Some(ids) => {
+            for trace_id in ids {
+                if let Some(spans) = store.traces.get(&trace_id) {
+                    scan(spans, trace_id);
+                }
+            }
+        }
+        None => {
+            for (&trace_id, spans) in &store.traces {
+                scan(spans, trace_id);
+            }
         }
     }
 
     // Sort by trace_id for deterministic output
     results.sort_by_key(|a| a.trace_id);
     results
+}
+
+/// Compute a narrowed candidate trace-ID set from indexable `=` conditions.
+///
+/// Returns `None` when narrowing is unsafe (an OR is present) or when no
+/// condition is indexable — callers then fall back to a full scan. Only `=`
+/// (Eq) on name, status, or `resource.service.name` is indexable; `!=` never
+/// is, because the indexes map a key to traces that *contain* a matching span,
+/// not traces that *only* contain it.
+fn candidate_trace_ids(
+    conditions: &[SpanCondition],
+    logical_ops: &[LogicalOp],
+    store: &TraceStore,
+) -> Option<Vec<[u8; 16]>> {
+    if logical_ops.contains(&LogicalOp::Or) {
+        return None;
+    }
+
+    let mut candidate: Option<FxHashSet<[u8; 16]>> = None;
+    for cond in conditions {
+        if let Some(set) = indexable_traces(cond, store) {
+            candidate = Some(match candidate {
+                None => set,
+                Some(cur) => cur.intersection(&set).copied().collect(),
+            });
+        }
+    }
+    candidate.map(|s| s.into_iter().collect())
+}
+
+/// Look up the trace-ID set an indexable `=` condition resolves to, or `None`
+/// when the condition is not indexable (or the key isn't present in the store).
+fn indexable_traces(cond: &SpanCondition, store: &TraceStore) -> Option<FxHashSet<[u8; 16]>> {
+    match cond {
+        SpanCondition::Name {
+            op: CompareOp::Eq,
+            value,
+        } => store
+            .interner
+            .get(value)
+            .and_then(|spur| store.name_index.get(&spur).cloned()),
+        SpanCondition::Status {
+            op: CompareOp::Eq,
+            value,
+        } => {
+            let status = match value {
+                SpanStatusValue::Ok => SpanStatus::Ok,
+                SpanStatusValue::Error => SpanStatus::Error,
+                SpanStatusValue::Unset => SpanStatus::Unset,
+            };
+            store.status_index.get(&status).cloned()
+        }
+        SpanCondition::Attribute {
+            scope: AttrScope::Resource,
+            name,
+            op: CompareOp::Eq,
+            value: SpanValue::String(s),
+        } if name == "service.name" => store
+            .interner
+            .get(s)
+            .and_then(|spur| store.service_index.get(&spur).cloned()),
+        _ => None,
+    }
 }
 
 /// Pre-compile regex patterns from conditions. Returns one Option<Regex> per condition.

@@ -103,6 +103,36 @@ fn test_eval_by_status() {
 }
 
 #[test]
+fn test_eval_or_query_uses_full_scan_correctly() {
+    // OR forces the non-indexed full-scan path; ensure it still returns the
+    // right spans. Trace 1 has gateway (span1) and an error (span2); trace 2
+    // matches neither side.
+    let store = make_store();
+    let expr = crate::query::traceql::parser::parse_traceql(
+        r#"{ resource.service.name = "gateway" || status = error }"#,
+    )
+    .unwrap();
+    let results = evaluate_traceql(&expr, &store);
+    assert_eq!(results.len(), 1);
+    // Both gateway and error spans of trace 1 match.
+    assert_eq!(results[0].matched_spans.len(), 2);
+}
+
+#[test]
+fn test_eval_indexed_conjunction_narrows_correctly() {
+    // A service + status conjunction is indexable on both; verify the
+    // narrowed candidate set still produces exact results.
+    let store = make_store();
+    let expr = crate::query::traceql::parser::parse_traceql(
+        r#"{ resource.service.name = "payments" && status = error }"#,
+    )
+    .unwrap();
+    let results = evaluate_traceql(&expr, &store);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].matched_spans[0].name, "process_payment");
+}
+
+#[test]
 fn test_eval_structural_descendant() {
     let store = make_store();
     let expr = crate::query::traceql::parser::parse_traceql(
