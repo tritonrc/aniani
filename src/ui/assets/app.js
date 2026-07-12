@@ -362,6 +362,25 @@ const TraceView = {
       }
       return out
     },
+    // Bird's-eye Gantt of every span (ignoring collapse state), shown for large
+    // traces where the full waterfall needs scrolling. Thin colored bars pack
+    // the whole timeline so clusters and gaps are visible at a glance.
+    showMinimap() {
+      return (this.model && this.model.count >= 40) || false
+    },
+    minimapBars() {
+      const m = this.model
+      if (!m) return []
+      const total = m.totalNs || 1
+      return m.spans.map((s) => {
+        let leftPct = Math.min(100, Math.max(0, (s.offsetNs / total) * 100))
+        let widthPct = (s.durationNs / total) * 100
+        if (!isFinite(widthPct) || widthPct < 0) widthPct = 0
+        widthPct = Math.min(100, Math.max(widthPct, 0.3))
+        if (leftPct + widthPct > 100) leftPct = Math.max(0, 100 - widthPct)
+        return { uid: s.uid, leftPct, widthPct, color: m.serviceColor[s.service], error: s.statusCode === 2 }
+      })
+    },
   },
   methods: {
     formatDuration(ns) {
@@ -468,6 +487,15 @@ const TraceView = {
         <span class="tv-legend-item" v-for="svc in model.services" :key="svc">
           <span class="tv-swatch" :style="{ background: model.serviceColor[svc] }"></span>{{ svc }}
         </span>
+      </div>
+      <div class="tv-minimap" v-if="showMinimap" :title="model.count + ' spans — overview'">
+        <span
+          v-for="b in minimapBars"
+          :key="'m' + b.uid"
+          class="tv-minimap-bar"
+          :class="{ err: b.error }"
+          :style="{ left: b.leftPct + '%', width: b.widthPct + '%', background: b.color }"
+        ></span>
       </div>
       <pre class="json" v-if="showRaw">{{ pretty(detail) }}</pre>
       <template v-else>

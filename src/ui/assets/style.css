@@ -390,6 +390,26 @@ header h1 { margin: 16px 0 8px; font-size: 20px; }
 
 .tl-section { margin-top: 12px; }
 .tl-section h4 { margin: 0 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* ---- Trace minimap: bird's-eye span Gantt for large traces ---- */
+.tv-minimap {
+  position: relative;
+  height: 22px;
+  margin: 6px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+  overflow: hidden;
+}
+.tv-minimap-bar {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  min-width: 1px;
+  opacity: 0.55;
+  border-radius: 1px;
+}
+.tv-minimap-bar.err { opacity: 1; box-shadow: 0 0 0 1px var(--err, #fc5c65); }
 .tl-cols { display: flex; flex-wrap: wrap; gap: 24px; }
 .tl-cols .tl-section { flex: 1 1 280px; min-width: 0; }
 
