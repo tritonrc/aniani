@@ -68,7 +68,10 @@ pub fn ingest_logs(state: &AppState, request: ExportLogsServiceRequest) -> usize
     // Per-entry OTLP attributes are captured as typed data alongside each
     // entry (not promoted to stream labels), preventing cardinality explosion.
     type RawAttr = (String, PreparedLogAttr);
-    type LogBatch = (Vec<(String, String)>, Vec<(LogEntry, Vec<RawAttr>)>);
+    type LogBatch = (
+        Vec<(String, String)>,
+        Vec<(LogEntry, Vec<RawAttr>, Option<String>)>,
+    );
     let mut grouped: Vec<LogBatch> = Vec::new();
     let mut key_index: FxHashMap<Vec<(String, String)>, usize> = FxHashMap::default();
 
@@ -110,14 +113,23 @@ pub fn ingest_logs(state: &AppState, request: ExportLogsServiceRequest) -> usize
                     ingest_seq: state.ingest_seq.fetch_add(1, Ordering::Relaxed),
                     trace_id: trace_id_bytes(&log_record.trace_id),
                     span_id: span_id_bytes(&log_record.span_id),
+                    severity_number: log_record.severity_number,
+                    severity_text: None,
                     attributes: SmallVec::new(),
                 };
 
+                // Capture severity_text for interning inside the lock.
+                let sev_text = if log_record.severity_text.is_empty() {
+                    None
+                } else {
+                    Some(log_record.severity_text.clone())
+                };
+
                 match key_index.get(&labels).copied() {
-                    Some(idx) => grouped[idx].1.push((entry, raw_attrs)),
+                    Some(idx) => grouped[idx].1.push((entry, raw_attrs, sev_text)),
                     None => {
                         key_index.insert(labels.clone(), grouped.len());
-                        grouped.push((labels, vec![(entry, raw_attrs)]));
+                        grouped.push((labels, vec![(entry, raw_attrs, sev_text)]));
                     }
                 }
             }
@@ -129,7 +141,7 @@ pub fn ingest_logs(state: &AppState, request: ExportLogsServiceRequest) -> usize
     let entry_count: usize = grouped.iter().map(|(_, e)| e.len()).sum();
     let mut store = state.log_store.write();
     for (labels, mut entries) in grouped {
-        for (entry, raw_attrs) in entries.iter_mut() {
+        for (entry, raw_attrs, sev_text) in entries.iter_mut() {
             for (key, val) in raw_attrs.drain(..) {
                 let key_spur = store.interner.get_or_intern(key);
                 let attr_val = match val {
@@ -142,8 +154,11 @@ pub fn ingest_logs(state: &AppState, request: ExportLogsServiceRequest) -> usize
                 };
                 entry.attributes.push((key_spur, attr_val));
             }
+            if let Some(text) = sev_text.take() {
+                entry.severity_text = Some(store.interner.get_or_intern(text));
+            }
         }
-        let entries: Vec<LogEntry> = entries.into_iter().map(|(e, _)| e).collect();
+        let entries: Vec<LogEntry> = entries.into_iter().map(|(e, _, _)| e).collect();
         store.ingest_stream(labels, entries);
     }
 

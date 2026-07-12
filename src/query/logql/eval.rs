@@ -252,7 +252,7 @@ fn evaluate_unlimited_stream_query(
             .iter()
             .filter(|e| apply_stages(&e.line, stages))
             .map(|e| {
-                let attrs: Vec<(String, String)> = e
+                let mut attrs: Vec<(String, String)> = e
                     .attributes
                     .iter()
                     .map(|(k, v)| {
@@ -262,6 +262,15 @@ fn evaluate_unlimited_stream_query(
                         )
                     })
                     .collect();
+                if e.severity_number != 0 {
+                    attrs.push(("severity_number".to_string(), e.severity_number.to_string()));
+                }
+                if let Some(text) = e.severity_text {
+                    attrs.push((
+                        "severity_text".to_string(),
+                        store.interner.resolve(&text).to_string(),
+                    ));
+                }
                 (
                     e.timestamp_ns,
                     e.line.clone(),
@@ -320,16 +329,31 @@ fn evaluate_limited_stream_query(
                 entry.line.clone(),
                 entry.trace_id,
                 entry.span_id,
-                entry
-                    .attributes
-                    .iter()
-                    .map(|(k, v)| {
-                        (
-                            store.interner.resolve(k).to_string(),
-                            store.resolve_attribute_value(v),
-                        )
-                    })
-                    .collect(),
+                {
+                    let mut attrs: Vec<(String, String)> = entry
+                        .attributes
+                        .iter()
+                        .map(|(k, v)| {
+                            (
+                                store.interner.resolve(k).to_string(),
+                                store.resolve_attribute_value(v),
+                            )
+                        })
+                        .collect();
+                    if entry.severity_number != 0 {
+                        attrs.push((
+                            "severity_number".to_string(),
+                            entry.severity_number.to_string(),
+                        ));
+                    }
+                    if let Some(text) = entry.severity_text {
+                        attrs.push((
+                            "severity_text".to_string(),
+                            store.interner.resolve(&text).to_string(),
+                        ));
+                    }
+                    attrs
+                },
             )));
             sequence = sequence.wrapping_add(1);
         }

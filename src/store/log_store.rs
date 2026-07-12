@@ -28,6 +28,13 @@ pub struct LogEntry {
     /// presentation layer.
     #[serde(default)]
     pub span_id: Option<[u8; 8]>,
+    /// OTLP severity number (0 when absent, e.g. Loki-push).
+    #[serde(default)]
+    pub severity_number: i32,
+    /// OTLP severity text (interned, e.g. "INFO", "ERROR"). `None` when
+    /// absent (Loki-push entries have no first-class severity text).
+    #[serde(default)]
+    pub severity_text: Option<Spur>,
     /// Per-entry structured attributes (typed, interned). OTLP
     /// `LogRecord.attributes` land here instead of being promoted to stream
     /// labels, avoiding cardinality explosion from high-cardinality keys.

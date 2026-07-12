@@ -283,6 +283,8 @@ mod tests {
                         ingest_seq: 0,
                         trace_id: None,
                         span_id: None,
+                        severity_number: 0,
+                        severity_text: None,
                         attributes: SmallVec::new(),
                     },
                     LogEntry {
@@ -291,6 +293,8 @@ mod tests {
                         ingest_seq: 5,
                         trace_id: None,
                         span_id: None,
+                        severity_number: 0,
+                        severity_text: None,
                         attributes: SmallVec::new(),
                     },
                 ],
@@ -345,6 +349,8 @@ mod tests {
                     ingest_seq: 0,
                     trace_id: None,
                     span_id: None,
+                    severity_number: 0,
+                    severity_text: None,
                     attributes: SmallVec::new(),
                 }],
             );
@@ -359,6 +365,8 @@ mod tests {
                     ingest_seq: 1,
                     trace_id: None,
                     span_id: None,
+                    severity_number: 0,
+                    severity_text: None,
                     attributes: SmallVec::new(),
                 }],
             );
