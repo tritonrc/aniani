@@ -182,6 +182,13 @@ function normalizeSpan(sp, service) {
       timeBig: toBigNs(ev.timeUnixNano),
       attributes: mapAttrs(ev.attributes),
     })),
+    links: (sp.links || []).map((l) => ({
+      traceId: l.traceId || '',
+      spanId: l.spanId || '',
+      traceState: l.traceState || '',
+      flags: l.flags || 0,
+      attributes: mapAttrs(l.attributes),
+    })),
   }
 }
 
@@ -424,6 +431,15 @@ const TraceView = {
       const end = span.endBig + 30_000_000_000n
       return href('logs', { q: '{service="' + escLabel(span.service) + '"}', start: String(start), end: String(end) })
     },
+    // Hash link to open a different trace (used by span-link pivots).
+    traceLinkHref(traceId) {
+      return href('traces', { trace: traceId })
+    },
+    // Abbreviate a 16/8-byte hex id for compact display.
+    shortId(id) {
+      if (!id) return ''
+      return id.length > 12 ? id.slice(0, 8) + '…' : id
+    },
   },
   template: `
     <div class="trace-view" v-if="model">
@@ -525,6 +541,20 @@ const TraceView = {
                   <div class="tl-event-head">{{ ev.name }}<span class="tl-at"> @ +{{ formatDuration(ev.offsetNs) }}</span></div>
                   <table class="tl-kv" v-if="ev.attributes.length"><tbody>
                     <tr v-for="(a, j) in ev.attributes" :key="j"><td class="k">{{ a.key }}</td><td class="v">{{ a.value }}</td></tr>
+                  </tbody></table>
+                </div>
+              </div>
+              <div class="tl-section" v-if="row.span.links && row.span.links.length">
+                <h4>Links</h4>
+                <div class="tl-link" v-for="(lk, i) in row.span.links" :key="'l' + i">
+                  <div class="tl-link-head">
+                    <a class="pivot-link" :href="traceLinkHref(lk.traceId)" :title="'Open linked trace ' + lk.traceId">{{ shortId(lk.traceId) }}</a>
+                    <span class="tl-link-span mono">/{{ shortId(lk.spanId) }}</span>
+                  </div>
+                  <table class="tl-kv" v-if="lk.traceState || lk.flags || lk.attributes.length"><tbody>
+                    <tr v-if="lk.traceState"><td class="k">traceState</td><td class="v mono">{{ lk.traceState }}</td></tr>
+                    <tr v-if="lk.flags"><td class="k">flags</td><td class="v mono">{{ lk.flags }}</td></tr>
+                    <tr v-for="(a, j) in lk.attributes" :key="j"><td class="k">{{ a.key }}</td><td class="v">{{ a.value }}</td></tr>
                   </tbody></table>
                 </div>
               </div>
