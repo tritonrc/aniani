@@ -286,3 +286,37 @@ fn test_status_neq_still_parses() {
     let expr = parse_traceql("{ status != error }").unwrap();
     assert!(matches!(expr, TraceQLExpr::SpanSelector { .. }));
 }
+
+#[test]
+fn test_kind_selector() {
+    let expr = parse_traceql(r#"{ kind = server }"#).unwrap();
+    match expr {
+        TraceQLExpr::SpanSelector { conditions, .. } => match &conditions[0] {
+            SpanCondition::Kind { op, value } => {
+                assert_eq!(*op, CompareOp::Eq);
+                assert_eq!(*value, SpanKindValue::Server);
+            }
+            _ => panic!("expected Kind"),
+        },
+        _ => panic!("expected SpanSelector"),
+    }
+}
+
+#[test]
+fn test_kind_with_unsupported_operator_is_parse_error() {
+    for q in [
+        "{ kind >= server }",
+        "{ kind < client }",
+        "{ kind > internal }",
+        "{ kind <= consumer }",
+    ] {
+        let result = parse_traceql(q);
+        assert!(result.is_err(), "expected parse error for: {}", q);
+    }
+}
+
+#[test]
+fn test_kind_neq_still_parses() {
+    let expr = parse_traceql("{ kind != client }").unwrap();
+    assert!(matches!(expr, TraceQLExpr::SpanSelector { .. }));
+}

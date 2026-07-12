@@ -192,3 +192,58 @@ fn test_eval_count_filter_excludes_all() {
     let results = evaluate_traceql(&expr, &store);
     assert!(results.is_empty());
 }
+
+#[test]
+fn test_eval_by_kind() {
+    let mut store = TraceStore::new();
+    let tid = [9u8; 16];
+    let svc = store.interner.get_or_intern("svc");
+    let server_op = store.interner.get_or_intern("GET /");
+    let db_op = store.interner.get_or_intern("db.query");
+    store.ingest_spans(vec![
+        Span {
+            trace_id: tid,
+            span_id: [1, 0, 0, 0, 0, 0, 0, 0],
+            parent_span_id: None,
+            name: server_op,
+            service_name: svc,
+            start_time_ns: 0,
+            duration_ns: 100,
+            status: SpanStatus::Ok,
+            status_message: None,
+            attributes: SmallVec::new(),
+            events: Vec::new(),
+            links: Vec::new(),
+            kind: SpanKind::Server,
+            ingest_seq: 0,
+        },
+        Span {
+            trace_id: tid,
+            span_id: [2, 0, 0, 0, 0, 0, 0, 0],
+            parent_span_id: Some([1, 0, 0, 0, 0, 0, 0, 0]),
+            name: db_op,
+            service_name: svc,
+            start_time_ns: 10,
+            duration_ns: 5,
+            status: SpanStatus::Ok,
+            status_message: None,
+            attributes: SmallVec::new(),
+            events: Vec::new(),
+            links: Vec::new(),
+            kind: SpanKind::Client,
+            ingest_seq: 0,
+        },
+    ]);
+
+    let eq_expr = crate::query::traceql::parser::parse_traceql("{ kind = server }").unwrap();
+    let eq_results = evaluate_traceql(&eq_expr, &store);
+    assert_eq!(eq_results.len(), 1);
+    assert_eq!(eq_results[0].matched_spans.len(), 1);
+    assert_eq!(eq_results[0].matched_spans[0].name, "GET /");
+
+    let neq_expr = crate::query::traceql::parser::parse_traceql("{ kind != client }").unwrap();
+    let neq_results = evaluate_traceql(&neq_expr, &store);
+    assert_eq!(neq_results.len(), 1);
+    assert_eq!(neq_results[0].matched_spans.len(), 1);
+    assert_eq!(neq_results[0].matched_spans[0].name, "GET /");
+}

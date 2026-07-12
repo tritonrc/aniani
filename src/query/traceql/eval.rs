@@ -2,11 +2,11 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::store::trace_store::{AttributeValue, Span, SpanStatus, TraceStore};
+use crate::store::trace_store::{AttributeValue, Span, SpanKind, SpanStatus, TraceStore};
 
 use super::parser::{
-    AttrScope, CompareOp, LogicalOp, PipelineStage, SpanCondition, SpanStatusValue, SpanValue,
-    StructuralOp, TraceQLExpr,
+    AttrScope, CompareOp, LogicalOp, PipelineStage, SpanCondition, SpanKindValue, SpanStatusValue,
+    SpanValue, StructuralOp, TraceQLExpr,
 };
 
 /// Result of a TraceQL evaluation.
@@ -342,6 +342,21 @@ fn span_matches_condition(
         SpanCondition::Name { op, value } => {
             let span_name = store.resolve(&span.name);
             compare_string(span_name, op, value, compiled_regex)
+        }
+        SpanCondition::Kind { op, value } => {
+            let kind_matches = match value {
+                SpanKindValue::Unspecified => span.kind == SpanKind::Unspecified,
+                SpanKindValue::Internal => span.kind == SpanKind::Internal,
+                SpanKindValue::Server => span.kind == SpanKind::Server,
+                SpanKindValue::Client => span.kind == SpanKind::Client,
+                SpanKindValue::Producer => span.kind == SpanKind::Producer,
+                SpanKindValue::Consumer => span.kind == SpanKind::Consumer,
+            };
+            match op {
+                CompareOp::Eq => kind_matches,
+                CompareOp::Neq => !kind_matches,
+                _ => false,
+            }
         }
         SpanCondition::Attribute {
             scope,

@@ -84,6 +84,8 @@ pub enum SpanCondition {
         op: CompareOp,
         value: SpanStatusValue,
     },
+    /// Span kind comparison: `kind = server|client|...`.
+    Kind { op: CompareOp, value: SpanKindValue },
     /// Span name comparison: `name op "value"`.
     Name { op: CompareOp, value: String },
 }
@@ -128,6 +130,17 @@ pub enum SpanStatusValue {
     Ok,
     Error,
     Unset,
+}
+
+/// Span kind values, mirroring OTLP `SpanKind`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SpanKindValue {
+    Unspecified,
+    Internal,
+    Server,
+    Client,
+    Producer,
+    Consumer,
 }
 
 /// Parse a TraceQL expression.
@@ -258,6 +271,9 @@ fn parse_condition(input: &str) -> IResult<&str, SpanCondition> {
     if peek_keyword(input, "status") {
         return parse_status_condition(input);
     }
+    if peek_keyword(input, "kind") {
+        return parse_kind_condition(input);
+    }
     if peek_keyword(input, "name") {
         return parse_name_condition(input);
     }
@@ -306,6 +322,30 @@ fn parse_status_condition(input: &str) -> IResult<&str, SpanCondition> {
         )));
     }
     Ok((input, SpanCondition::Status { op, value: status }))
+}
+
+fn parse_kind_condition(input: &str) -> IResult<&str, SpanCondition> {
+    let (input, _) = tag("kind")(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, op) = parse_compare_op(input)?;
+    let (input, _) = multispace0(input)?;
+    // Order matters: longer keywords first so "consumer" isn't truncated to "c".
+    let (input, kind) = alt((
+        map(tag("unspecified"), |_| SpanKindValue::Unspecified),
+        map(tag("internal"), |_| SpanKindValue::Internal),
+        map(tag("server"), |_| SpanKindValue::Server),
+        map(tag("client"), |_| SpanKindValue::Client),
+        map(tag("producer"), |_| SpanKindValue::Producer),
+        map(tag("consumer"), |_| SpanKindValue::Consumer),
+    ))
+    .parse_complete(input)?;
+    if !matches!(op, CompareOp::Eq | CompareOp::Neq) {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        )));
+    }
+    Ok((input, SpanCondition::Kind { op, value: kind }))
 }
 
 fn parse_name_condition(input: &str) -> IResult<&str, SpanCondition> {
