@@ -156,11 +156,21 @@ function serviceFromResource(resource) {
   return (a && a.value && a.value.stringValue) || 'unknown'
 }
 
+// Map OTLP attributes into flat {key, value, title} rows. Long values —
+// common for the structured types (arrays, byte strings, key-value lists)
+// — are truncated for table density with the full text carried in `title`
+// for hover. `title` is empty for short values so the cell renders cleanly.
+const ATTR_VALUE_MAX = 96
 function mapAttrs(list) {
-  return (list || []).map((a) => ({
-    key: a.key,
-    value: (a.value && a.value.stringValue) != null ? String(a.value.stringValue) : '',
-  }))
+  return (list || []).map((a) => {
+    const raw = (a.value && a.value.stringValue) != null ? String(a.value.stringValue) : ''
+    const tooLong = raw.length > ATTR_VALUE_MAX
+    return {
+      key: a.key,
+      value: tooLong ? raw.slice(0, ATTR_VALUE_MAX) + '…' : raw,
+      title: tooLong ? raw : '',
+    }
+  })
 }
 
 // Normalize one OTLP span (from /api/traces/{id}) into a flat view model.
@@ -403,12 +413,12 @@ const TraceView = {
     spanTags(span) {
       return span.attributes
         .filter((a) => a.key.indexOf('resource.') !== 0)
-        .map((a) => ({ key: a.key.indexOf('span.') === 0 ? a.key.slice(5) : a.key, value: a.value }))
+        .map((a) => ({ key: a.key.indexOf('span.') === 0 ? a.key.slice(5) : a.key, value: a.value, title: a.title || '' }))
     },
     processTags(span) {
       return span.attributes
         .filter((a) => a.key.indexOf('resource.') === 0)
-        .map((a) => ({ key: a.key.slice(9), value: a.value }))
+        .map((a) => ({ key: a.key.slice(9), value: a.value, title: a.title || '' }))
     },
     exceptions(span) {
       return span.events.filter(isException).map((ev) => ({
@@ -526,13 +536,13 @@ const TraceView = {
                 <div class="tl-section" v-if="spanTags(row.span).length">
                   <h4>Tags</h4>
                   <table class="tl-kv"><tbody>
-                    <tr v-for="(a, i) in spanTags(row.span)" :key="'t' + i"><td class="k">{{ a.key }}</td><td class="v">{{ a.value }}</td></tr>
+                    <tr v-for="(a, i) in spanTags(row.span)" :key="'t' + i"><td class="k">{{ a.key }}</td><td class="v" :title="a.title">{{ a.value }}</td></tr>
                   </tbody></table>
                 </div>
                 <div class="tl-section" v-if="processTags(row.span).length">
                   <h4>Process</h4>
                   <table class="tl-kv"><tbody>
-                    <tr v-for="(a, i) in processTags(row.span)" :key="'p' + i"><td class="k">{{ a.key }}</td><td class="v">{{ a.value }}</td></tr>
+                    <tr v-for="(a, i) in processTags(row.span)" :key="'p' + i"><td class="k">{{ a.key }}</td><td class="v" :title="a.title">{{ a.value }}</td></tr>
                   </tbody></table>
                 </div>
               </div>
@@ -541,7 +551,7 @@ const TraceView = {
                 <div class="tl-event" v-for="(ev, i) in otherEvents(row.span)" :key="'e' + i">
                   <div class="tl-event-head">{{ ev.name }}<span class="tl-at"> @ +{{ formatDuration(ev.offsetNs) }}</span></div>
                   <table class="tl-kv" v-if="ev.attributes.length"><tbody>
-                    <tr v-for="(a, j) in ev.attributes" :key="j"><td class="k">{{ a.key }}</td><td class="v">{{ a.value }}</td></tr>
+                    <tr v-for="(a, j) in ev.attributes" :key="j"><td class="k">{{ a.key }}</td><td class="v" :title="a.title">{{ a.value }}</td></tr>
                   </tbody></table>
                 </div>
               </div>
@@ -555,7 +565,7 @@ const TraceView = {
                   <table class="tl-kv" v-if="lk.traceState || lk.flags || lk.attributes.length"><tbody>
                     <tr v-if="lk.traceState"><td class="k">traceState</td><td class="v mono">{{ lk.traceState }}</td></tr>
                     <tr v-if="lk.flags"><td class="k">flags</td><td class="v mono">{{ lk.flags }}</td></tr>
-                    <tr v-for="(a, j) in lk.attributes" :key="j"><td class="k">{{ a.key }}</td><td class="v">{{ a.value }}</td></tr>
+                    <tr v-for="(a, j) in lk.attributes" :key="j"><td class="k">{{ a.key }}</td><td class="v" :title="a.title">{{ a.value }}</td></tr>
                   </tbody></table>
                 </div>
               </div>
