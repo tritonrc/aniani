@@ -175,6 +175,7 @@ function normalizeSpan(sp, service) {
     startBig: toBigNs(sp.startTimeUnixNano),
     endBig: toBigNs(sp.endTimeUnixNano),
     statusCode: (sp.status && sp.status.code) || 0,
+    statusMessage: (sp.status && sp.status.message) || '',
     kind: sp.kind || 0,
     attributes: mapAttrs(sp.attributes),
     events: (sp.events || []).map((ev) => ({
@@ -507,7 +508,7 @@ const TraceView = {
                 <div><span class="k">Operation</span><span class="v">{{ row.span.name }}</span></div>
                 <div><span class="k">Logs</span><span class="v"><a :href="viewLogsHref(row.span)" class="pivot-link">View logs (±30s)</a></span></div>
                 <div><span class="k">Kind</span><span class="v">{{ kindLabel(row.span.kind) }}</span></div>
-                <div><span class="k">Status</span><span class="v" :class="statusClass(row.span.statusCode)">{{ statusLabel(row.span.statusCode) }}</span></div>
+                <div><span class="k">Status</span><span class="v" :class="statusClass(row.span.statusCode)">{{ statusLabel(row.span.statusCode) }}<span class="tl-status-msg" v-if="row.span.statusMessage"> — {{ row.span.statusMessage }}</span></span></div>
                 <div><span class="k">Duration</span><span class="v">{{ formatDuration(row.span.durationNs) }}</span></div>
                 <div><span class="k">Start</span><span class="v">+{{ formatDuration(row.span.offsetNs) }}</span></div>
                 <div><span class="k">Span ID</span><span class="v mono">{{ row.span.spanId }}</span></div>

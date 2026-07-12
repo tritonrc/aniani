@@ -423,6 +423,7 @@ header h1 { margin: 16px 0 8px; font-size: 20px; }
 .tl-link { margin-bottom: 8px; }
 .tl-link-head { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .tl-link-span { color: var(--muted); margin-left: 2px; }
+.tl-status-msg { color: var(--text); }
 
 /* ---- Logs view: two-line rows, severity badge, clamp, error caret ---- */
 .log-rows {
