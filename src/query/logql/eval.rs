@@ -129,13 +129,30 @@ fn evaluate_metric_query(
             let mut numeric_min = f64::INFINITY;
             let mut numeric_max = f64::NEG_INFINITY;
 
-            for entry in entries
-                .iter()
-                .filter(|e| apply_stages(&e.line, &stages, &labels))
-            {
+            // Find unwrap field if present.
+            let unwrap_field: Option<&str> = stages.iter().find_map(|s| {
+                if let PipelineStage::Unwrap(f) = s {
+                    Some(f.as_str())
+                } else {
+                    None
+                }
+            });
+
+            for entry in entries.iter() {
+                let Some(extracted) = apply_stages_with_extract(&entry.line, &stages, &labels)
+                else {
+                    continue;
+                };
                 count += 1;
                 byte_sum += entry.line.len();
-                if let Ok(value) = entry.line.trim().parse::<f64>() {
+                let numeric_val = if let Some(field) = unwrap_field {
+                    extracted
+                        .get(field)
+                        .and_then(|v| v.trim().parse::<f64>().ok())
+                } else {
+                    entry.line.trim().parse::<f64>().ok()
+                };
+                if let Some(value) = numeric_val {
                     numeric_count += 1;
                     numeric_sum += value;
                     numeric_min = numeric_min.min(value);
@@ -414,6 +431,17 @@ fn extract_selector_and_stages(
 }
 
 fn apply_stages(line: &str, stages: &[PipelineStage], stream_labels: &[(String, String)]) -> bool {
+    apply_stages_with_extract(line, stages, stream_labels).is_some()
+}
+
+/// Run pipeline stages, returning the extracted label map on success or
+/// `None` if a stage filters the entry out. Used by the metric evaluator to
+/// access `| unwrap` fields.
+fn apply_stages_with_extract(
+    line: &str,
+    stages: &[PipelineStage],
+    stream_labels: &[(String, String)],
+) -> Option<FxHashMap<String, String>> {
     let mut extracted: FxHashMap<String, String> = FxHashMap::default();
     // Seed with the stream's own labels so that LabelFilter stages can match
     // them even without a preceding | json / | logfmt extraction. This mirrors
@@ -425,22 +453,22 @@ fn apply_stages(line: &str, stages: &[PipelineStage], stream_labels: &[(String, 
         match stage {
             PipelineStage::LineContains(pattern) => {
                 if !line.contains(pattern.as_str()) {
-                    return false;
+                    return None;
                 }
             }
             PipelineStage::LineNotContains(pattern) => {
                 if line.contains(pattern.as_str()) {
-                    return false;
+                    return None;
                 }
             }
             PipelineStage::LineRegex(_, re) => {
                 if !re.is_match(line) {
-                    return false;
+                    return None;
                 }
             }
             PipelineStage::LineNotRegex(_, re) => {
                 if re.is_match(line) {
-                    return false;
+                    return None;
                 }
             }
             PipelineStage::LogfmtExtract => {
@@ -475,6 +503,10 @@ fn apply_stages(line: &str, stages: &[PipelineStage], stream_labels: &[(String, 
                     }
                 }
             }
+            PipelineStage::Unwrap(_) => {
+                // No-op during filtering — the metric evaluator reads the
+                // field name and looks it up in the extracted map.
+            }
             PipelineStage::LabelFilter {
                 key,
                 op,
@@ -483,7 +515,7 @@ fn apply_stages(line: &str, stages: &[PipelineStage], stream_labels: &[(String, 
             } => {
                 let label_val = match extracted.get(key.as_str()) {
                     Some(v) => v.as_str(),
-                    None => return false, // label not found => filter fails
+                    None => return None, // label not found => filter fails
                 };
                 let matches = match op {
                     MatchOp::Eq => label_val == value,
@@ -498,12 +530,12 @@ fn apply_stages(line: &str, stages: &[PipelineStage], stream_labels: &[(String, 
                         .unwrap_or(false),
                 };
                 if !matches {
-                    return false;
+                    return None;
                 }
             }
         }
     }
-    true
+    Some(extracted)
 }
 
 fn convert_matchers(matchers: &[super::parser::LogQLMatcher]) -> Vec<LabelMatcher> {

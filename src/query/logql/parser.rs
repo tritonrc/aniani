@@ -129,6 +129,7 @@ pub enum PipelineStage {
     LineNotRegex(String, Regex), // !~ "regex"
     JsonExtract,                 // | json
     LogfmtExtract,               // | logfmt
+    Unwrap(String),              // | unwrap field
     LabelFilter {
         // | key="value"
         key: String,
@@ -375,6 +376,17 @@ fn parse_json_or_label_filter(input: &str) -> IResult<&str, PipelineStage> {
         && is_keyword_boundary(rest)
     {
         return Ok((rest, PipelineStage::LogfmtExtract));
+    }
+
+    // Try "unwrap <field>" — extracts a numeric field for metric queries
+    if let Ok((rest, _)) =
+        tag::<&str, &str, nom::error::Error<&str>>("unwrap").parse_complete(input)
+        && is_keyword_boundary(rest)
+    {
+        let (rest, _) = multispace0().parse_complete(rest)?;
+        let (rest, field) = nom::bytes::take_while1(|c: char| c.is_alphanumeric() || c == '_')
+            .parse_complete(rest)?;
+        return Ok((rest, PipelineStage::Unwrap(field.to_string())));
     }
 
     // Otherwise parse label filter: key op "value"
