@@ -133,6 +133,44 @@ fn test_eval_indexed_conjunction_narrows_correctly() {
 }
 
 #[test]
+fn test_eval_by_string_attribute_uses_attr_index() {
+    let mut store = TraceStore::new();
+    let tid1 = [10u8; 16];
+    let tid2 = [11u8; 16];
+    let svc = store.interner.get_or_intern("svc");
+    let op = store.interner.get_or_intern("handler");
+    let status_key = store.interner.get_or_intern("span.http.status_code");
+    let v500 = store.interner.get_or_intern("500");
+    let v200 = store.interner.get_or_intern("200");
+    let mk = |tid, span_id, val| Span {
+        trace_id: tid,
+        span_id,
+        parent_span_id: None,
+        name: op,
+        service_name: svc,
+        start_time_ns: 0,
+        duration_ns: 10,
+        status: SpanStatus::Ok,
+        status_message: None,
+        attributes: SmallVec::from_vec(vec![(status_key, AttributeValue::String(val))]),
+        events: Vec::new(),
+        links: Vec::new(),
+        kind: SpanKind::Server,
+        ingest_seq: 0,
+    };
+    store.ingest_spans(vec![
+        mk(tid1, [1, 0, 0, 0, 0, 0, 0, 0], v500),
+        mk(tid2, [2, 0, 0, 0, 0, 0, 0, 0], v200),
+    ]);
+
+    let expr = crate::query::traceql::parser::parse_traceql(r#"{ span.http.status_code = "500" }"#)
+        .unwrap();
+    let results = evaluate_traceql(&expr, &store);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].trace_id, tid1);
+}
+
+#[test]
 fn test_eval_structural_descendant() {
     let store = make_store();
     let expr = crate::query::traceql::parser::parse_traceql(

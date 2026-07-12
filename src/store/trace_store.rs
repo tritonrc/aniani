@@ -164,6 +164,13 @@ pub struct TraceStore {
     pub name_index: FxHashMap<Spur, FxHashSet<[u8; 16]>>,
     /// Span status -> set of trace IDs.
     pub status_index: FxHashMap<SpanStatus, FxHashSet<[u8; 16]>>,
+    /// String attribute-value inverted index: attribute key (Spur) -> value
+    /// (Spur) -> set of trace IDs. Only `AttributeValue::String` values are
+    /// indexed, so TraceQL `=` conditions on hot string attributes (e.g.
+    /// `span.http.status_code`) can narrow candidate traces without a full
+    /// per-span scan. Rebuilt on eviction.
+    #[serde(default)]
+    pub attr_index: FxHashMap<Spur, FxHashMap<Spur, FxHashSet<[u8; 16]>>>,
     /// String interner.
     pub interner: Rodeo,
     /// Total span count for eviction.
@@ -178,6 +185,7 @@ impl TraceStore {
             service_index: FxHashMap::default(),
             name_index: FxHashMap::default(),
             status_index: FxHashMap::default(),
+            attr_index: FxHashMap::default(),
             interner: Rodeo::default(),
             total_spans: 0,
         }
@@ -199,6 +207,17 @@ impl TraceStore {
                 .entry(span.status)
                 .or_default()
                 .insert(trace_id);
+            // Index string-valued attributes for fast TraceQL `=` lookups.
+            for (key, val) in &span.attributes {
+                if let AttributeValue::String(v) = val {
+                    self.attr_index
+                        .entry(*key)
+                        .or_default()
+                        .entry(*v)
+                        .or_default()
+                        .insert(trace_id);
+                }
+            }
 
             self.traces.entry(trace_id).or_default().push(span);
             self.total_spans += 1;
@@ -311,6 +330,7 @@ impl TraceStore {
         self.service_index.retain(|_, v| !v.is_empty());
         self.name_index.retain(|_, v| !v.is_empty());
         self.status_index.retain(|_, v| !v.is_empty());
+        self.rebuild_attr_index();
     }
 
     /// Evict spans older than the given timestamp.
@@ -348,6 +368,7 @@ impl TraceStore {
         for (trace_id, before_keys) in changed {
             self.reconcile_trace_indexes(trace_id, &before_keys);
         }
+        self.rebuild_attr_index();
     }
 
     /// Build a TraceResult summary for a trace.
@@ -403,6 +424,7 @@ impl TraceStore {
         self.service_index.clear();
         self.name_index.clear();
         self.status_index.clear();
+        self.attr_index.clear();
         self.interner = Rodeo::default();
         self.total_spans = 0;
     }
@@ -434,6 +456,29 @@ impl TraceStore {
                     self.traces.remove(trace_id);
                 }
                 self.reconcile_trace_indexes(*trace_id, &before_keys);
+            }
+        }
+        self.rebuild_attr_index();
+    }
+
+    /// Rebuild the string attribute-value index from all surviving spans.
+    /// Called after eviction, which can remove individual spans or whole
+    /// traces; a full rebuild is simpler and obviously correct for the small
+    /// ephemeral store sizes aniani targets.
+    fn rebuild_attr_index(&mut self) {
+        self.attr_index.clear();
+        for (trace_id, spans) in &self.traces {
+            for span in spans {
+                for (key, val) in &span.attributes {
+                    if let AttributeValue::String(v) = val {
+                        self.attr_index
+                            .entry(*key)
+                            .or_default()
+                            .entry(*v)
+                            .or_default()
+                            .insert(*trace_id);
+                    }
+                }
             }
         }
     }
@@ -529,6 +574,15 @@ impl TraceStore {
             bytes += set.len() * (std::mem::size_of::<[u8; 16]>() + 8);
         }
         bytes += self.status_index.len() * (std::mem::size_of::<SpanStatus>() + 8);
+
+        // String attribute-value index: FxHashMap<Spur, FxHashMap<Spur, FxHashSet<[u8; 16]>>>
+        for inner in self.attr_index.values() {
+            bytes += inner.len() * (std::mem::size_of::<Spur>() + 8);
+            for set in inner.values() {
+                bytes += set.len() * (std::mem::size_of::<[u8; 16]>() + 8);
+            }
+        }
+        bytes += self.attr_index.len() * (std::mem::size_of::<Spur>() + 8);
 
         // Interner memory
         bytes += self.interner.current_memory_usage();

@@ -235,16 +235,47 @@ fn indexable_traces(cond: &SpanCondition, store: &TraceStore) -> Option<FxHashSe
             store.status_index.get(&status).cloned()
         }
         SpanCondition::Attribute {
-            scope: AttrScope::Resource,
+            scope,
             name,
             op: CompareOp::Eq,
             value: SpanValue::String(s),
-        } if name == "service.name" => store
-            .interner
-            .get(s)
-            .and_then(|spur| store.service_index.get(&spur).cloned()),
+        } => indexed_attribute_traces(scope, name, s, store),
         _ => None,
     }
+}
+
+/// Resolve an indexable string `=` attribute condition to its candidate trace
+/// set. `resource.service.name` uses the dedicated service index; every other
+/// key consults the generic string attribute-value index, trying the same
+/// candidate keys the per-span evaluator matches (`span.<name>`; and
+/// `resource.<name>` plus the bare `<name>` fallback for resource scope).
+fn indexed_attribute_traces(
+    scope: &AttrScope,
+    name: &str,
+    value: &str,
+    store: &TraceStore,
+) -> Option<FxHashSet<[u8; 16]>> {
+    if *scope == AttrScope::Resource && name == "service.name" {
+        return store
+            .interner
+            .get(value)
+            .and_then(|spur| store.service_index.get(&spur).cloned());
+    }
+    let candidate_keys: Vec<String> = match scope {
+        AttrScope::Span => vec![format!("span.{}", name)],
+        AttrScope::Resource => vec![format!("resource.{}", name), name.to_string()],
+    };
+    let val_spur = store.interner.get(value)?;
+    let mut out: FxHashSet<[u8; 16]> = FxHashSet::default();
+    for key_str in &candidate_keys {
+        if let Some(key_spur) = store.interner.get(key_str)
+            && let Some(values) = store.attr_index.get(&key_spur)
+            && let Some(set) = values.get(&val_spur)
+        {
+            out.extend(set.iter().copied());
+        }
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// Pre-compile regex patterns from conditions. Returns one Option<Regex> per condition.
