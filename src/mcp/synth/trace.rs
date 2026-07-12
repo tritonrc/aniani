@@ -177,6 +177,7 @@ mod tests {
                 kind: SpanKind::Server,
                 attributes: Default::default(),
                 events: vec![],
+                links: Vec::new(),
                 ingest_seq: 0,
             };
             let child = Span {
@@ -192,6 +193,7 @@ mod tests {
                 kind: SpanKind::Internal,
                 attributes: Default::default(),
                 events: vec![],
+                links: Vec::new(),
                 ingest_seq: 1,
             };
             traces.ingest_spans(vec![root, child]);
@@ -236,6 +238,7 @@ mod tests {
                     kind: SpanKind::Internal,
                     attributes: Default::default(),
                     events: vec![],
+                    links: Vec::new(),
                     ingest_seq: i as u64,
                 });
             }
@@ -275,6 +278,7 @@ mod tests {
                 kind: SpanKind::Internal,
                 attributes: Default::default(),
                 events: vec![],
+                links: Vec::new(),
                 ingest_seq: 0,
             };
             traces.ingest_spans(vec![mk(a, b), mk(b, a)]);

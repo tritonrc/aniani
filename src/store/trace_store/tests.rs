@@ -25,6 +25,7 @@ fn make_span(
         kind: SpanKind::Unspecified,
         attributes: SmallVec::new(),
         events: Vec::new(),
+        links: Vec::new(),
         ingest_seq: 0,
     }
 }
@@ -388,6 +389,7 @@ fn test_clear_service_preserves_other_service_spans() {
             kind: SpanKind::Unspecified,
             attributes: SmallVec::new(),
             events: Vec::new(),
+            links: Vec::new(),
             ingest_seq: 0,
         },
         Span {
@@ -403,6 +405,7 @@ fn test_clear_service_preserves_other_service_spans() {
             kind: SpanKind::Unspecified,
             attributes: SmallVec::new(),
             events: Vec::new(),
+            links: Vec::new(),
             ingest_seq: 0,
         },
     ]);
@@ -449,6 +452,7 @@ fn test_evict_partial_cleans_stale_indexes() {
             kind: SpanKind::Unspecified,
             attributes: SmallVec::new(),
             events: Vec::new(),
+            links: Vec::new(),
             ingest_seq: 0,
         },
         Span {
@@ -464,6 +468,7 @@ fn test_evict_partial_cleans_stale_indexes() {
             kind: SpanKind::Unspecified,
             attributes: SmallVec::new(),
             events: Vec::new(),
+            links: Vec::new(),
             ingest_seq: 0,
         },
     ]);

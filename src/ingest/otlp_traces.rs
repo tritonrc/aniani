@@ -16,7 +16,7 @@ use std::sync::atomic::Ordering;
 
 use super::label::extract_resource_labels;
 use super::{decode_body, is_json_content_type, u64_to_i64_saturating};
-use crate::store::trace_store::{AttributeValue, Span, SpanEvent, SpanKind, SpanStatus};
+use crate::store::trace_store::{AttributeValue, Span, SpanEvent, SpanKind, SpanLink, SpanStatus};
 use crate::store::{AppState, SharedState};
 
 /// Accepted-count summary returned by [`ingest_traces`].
@@ -45,6 +45,15 @@ struct PreparedEvent {
 }
 
 #[derive(Debug, Clone)]
+struct PreparedLink {
+    trace_id: [u8; 16],
+    span_id: [u8; 8],
+    trace_state: Option<String>,
+    attributes: SmallVec<[(String, PreparedAttributeValue); 4]>,
+    flags: u32,
+}
+
+#[derive(Debug, Clone)]
 struct PreparedSpan {
     trace_id: [u8; 16],
     span_id: [u8; 8],
@@ -58,6 +67,7 @@ struct PreparedSpan {
     kind: SpanKind,
     attributes: SmallVec<[(String, PreparedAttributeValue); 8]>,
     events: Vec<PreparedEvent>,
+    links: Vec<PreparedLink>,
     ingest_seq: u64,
 }
 
@@ -222,6 +232,40 @@ pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> Tr
                     })
                     .collect();
 
+                // Span links — cross-trace references. Invalid/zero trace or
+                // span IDs are skipped (a link must identify a concrete span).
+                let links: Vec<PreparedLink> = otlp_span
+                    .links
+                    .iter()
+                    .filter_map(|link| {
+                        let link_trace_id: [u8; 16] = link.trace_id.as_slice().try_into().ok()?;
+                        let link_span_id: [u8; 8] = link.span_id.as_slice().try_into().ok()?;
+                        if link_trace_id == [0u8; 16] || link_span_id == [0u8; 8] {
+                            return None;
+                        }
+                        let attributes = link
+                            .attributes
+                            .iter()
+                            .filter_map(|attr| {
+                                let av = convert_any_value(attr.value.as_ref()?)?;
+                                Some((attr.key.clone(), av))
+                            })
+                            .collect();
+                        let trace_state = if link.trace_state.is_empty() {
+                            None
+                        } else {
+                            Some(link.trace_state.clone())
+                        };
+                        Some(PreparedLink {
+                            trace_id: link_trace_id,
+                            span_id: link_span_id,
+                            trace_state,
+                            attributes,
+                            flags: link.flags,
+                        })
+                    })
+                    .collect();
+
                 trace_ids.insert(trace_id);
                 spans.push(PreparedSpan {
                     trace_id,
@@ -236,6 +280,7 @@ pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> Tr
                     kind,
                     attributes,
                     events,
+                    links,
                     ingest_seq: state.ingest_seq.fetch_add(1, Ordering::Relaxed),
                 });
             }
@@ -309,6 +354,22 @@ fn intern_prepared_span(
         })
         .collect();
 
+    let links = prepared
+        .links
+        .into_iter()
+        .map(|link| SpanLink {
+            trace_id: link.trace_id,
+            span_id: link.span_id,
+            trace_state: link.trace_state.map(|s| store.interner.get_or_intern(s)),
+            attributes: link
+                .attributes
+                .into_iter()
+                .map(|(key, value)| intern_attribute(store, key, value))
+                .collect(),
+            flags: link.flags,
+        })
+        .collect();
+
     Span {
         trace_id: prepared.trace_id,
         span_id: prepared.span_id,
@@ -324,6 +385,7 @@ fn intern_prepared_span(
         kind: prepared.kind,
         attributes,
         events,
+        links,
         ingest_seq: prepared.ingest_seq,
     }
 }
@@ -370,7 +432,6 @@ mod tests {
             }],
         }
     }
-
     #[test]
     fn status_message_is_captured_when_present() {
         let state = empty_test_state();
@@ -398,5 +459,62 @@ mod tests {
         let spans = store.get_trace(&[1u8; 16]).unwrap();
         assert_eq!(spans[0].status, SpanStatus::Error);
         assert!(spans[0].status_message.is_none());
+    }
+
+    #[test]
+    fn span_links_are_captured_when_present() {
+        use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
+        use opentelemetry_proto::tonic::trace::v1::span::Link as OtlpLink;
+
+        let state = empty_test_state();
+        let req = ExportTraceServiceRequest {
+            resource_spans: vec![ResourceSpans {
+                resource: Some(Resource::default()),
+                scope_spans: vec![ScopeSpans {
+                    spans: vec![Span {
+                        trace_id: vec![1; 16],
+                        span_id: vec![2; 8],
+                        links: vec![
+                            OtlpLink {
+                                trace_id: vec![0xaa; 16],
+                                span_id: vec![0xbb; 8],
+                                trace_state: "congo=1".into(),
+                                attributes: vec![KeyValue {
+                                    key: "link.cause".into(),
+                                    value: Some(AnyValue {
+                                        value: Some(any_value::Value::StringValue("retry".into())),
+                                    }),
+                                }],
+                                flags: 1,
+                                ..Default::default()
+                            },
+                            // Zero IDs must be skipped.
+                            OtlpLink {
+                                trace_id: vec![0; 16],
+                                span_id: vec![0; 8],
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+        };
+        ingest_traces(&state, req);
+        let store = state.trace_store.read();
+        let spans = store.get_trace(&[1u8; 16]).unwrap();
+        assert_eq!(spans[0].links.len(), 1);
+        let link = &spans[0].links[0];
+        assert_eq!(link.trace_id, [0xaa; 16]);
+        assert_eq!(link.span_id, [0xbb; 8]);
+        assert_eq!(link.flags, 1);
+        let ts = link.trace_state.expect("trace_state stored");
+        assert_eq!(store.resolve(&ts), "congo=1");
+        assert_eq!(link.attributes.len(), 1);
+        let (k, v) = &link.attributes[0];
+        assert_eq!(store.resolve(k), "link.cause");
+        assert_eq!(store.resolve_attribute_value(v), "retry");
     }
 }

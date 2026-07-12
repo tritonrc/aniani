@@ -78,6 +78,22 @@ pub struct SpanEvent {
     pub attributes: SmallVec<[(Spur, AttributeValue); 4]>,
 }
 
+/// A cross-trace reference (OTLP `Span.link`). Points at a span in another
+/// trace, carrying its own context attributes. Used by batch/async processors
+/// and fan-out workloads to relate causally-linked spans across trace boundaries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpanLink {
+    pub trace_id: [u8; 16],
+    pub span_id: [u8; 8],
+    /// W3C `tracestate` header; stored only when non-empty.
+    #[serde(default)]
+    pub trace_state: Option<Spur>,
+    pub attributes: SmallVec<[(Spur, AttributeValue); 4]>,
+    /// W3C trace flags (e.g. sampled bit).
+    #[serde(default)]
+    pub flags: u32,
+}
+
 /// A trace span.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Span {
@@ -96,6 +112,9 @@ pub struct Span {
     pub kind: SpanKind,
     pub attributes: SmallVec<[(Spur, AttributeValue); 8]>,
     pub events: Vec<SpanEvent>,
+    /// Cross-trace references (OTLP `Span.link`).
+    #[serde(default)]
+    pub links: Vec<SpanLink>,
     /// Global monotonic ingest sequence; assigned on store insert.
     #[serde(default)]
     pub ingest_seq: u64,
@@ -447,6 +466,11 @@ impl TraceStore {
                 bytes += span.events.capacity() * std::mem::size_of::<SpanEvent>();
                 for event in &span.events {
                     bytes += event.attributes.len() * std::mem::size_of::<(Spur, AttributeValue)>();
+                }
+                // Span links: the heap Vec of SpanLink plus each link's attributes
+                bytes += span.links.capacity() * std::mem::size_of::<SpanLink>();
+                for link in &span.links {
+                    bytes += link.attributes.len() * std::mem::size_of::<(Spur, AttributeValue)>();
                 }
             }
         }

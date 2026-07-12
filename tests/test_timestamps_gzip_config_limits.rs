@@ -440,6 +440,7 @@ fn test_trace_store_status_index() {
             kind: aniani::store::trace_store::SpanKind::Unspecified,
             attributes: smallvec::SmallVec::new(),
             events: Vec::new(),
+            links: Vec::new(),
             ingest_seq: 0,
         },
         aniani::store::trace_store::Span {
@@ -455,6 +456,7 @@ fn test_trace_store_status_index() {
             kind: aniani::store::trace_store::SpanKind::Unspecified,
             attributes: smallvec::SmallVec::new(),
             events: Vec::new(),
+            links: Vec::new(),
             ingest_seq: 0,
         },
         aniani::store::trace_store::Span {
@@ -470,6 +472,7 @@ fn test_trace_store_status_index() {
             kind: aniani::store::trace_store::SpanKind::Unspecified,
             attributes: smallvec::SmallVec::new(),
             events: Vec::new(),
+            links: Vec::new(),
             ingest_seq: 0,
         },
         aniani::store::trace_store::Span {
@@ -485,6 +488,7 @@ fn test_trace_store_status_index() {
             kind: aniani::store::trace_store::SpanKind::Unspecified,
             attributes: smallvec::SmallVec::new(),
             events: Vec::new(),
+            links: Vec::new(),
             ingest_seq: 0,
         },
     ]);

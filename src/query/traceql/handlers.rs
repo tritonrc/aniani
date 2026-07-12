@@ -238,6 +238,25 @@ pub async fn get_trace(
                     })
                     .collect();
 
+                let links: Vec<Value> = span
+                    .links
+                    .iter()
+                    .map(|link| {
+                        let link_attrs: Vec<Value> = link
+                            .attributes
+                            .iter()
+                            .map(|(k, v)| attribute_json(&store, k, v))
+                            .collect();
+                        json!({
+                            "traceId": hex_encode(&link.trace_id),
+                            "spanId": hex_encode(&link.span_id),
+                            "traceState": link.trace_state.map(|m| store.resolve(&m).to_string()).unwrap_or_default(),
+                            "flags": link.flags,
+                            "attributes": link_attrs,
+                        })
+                    })
+                    .collect();
+
                 let span_value = json!({
                     "traceId": hex_encode(&span.trace_id),
                     "spanId": hex_encode(&span.span_id),
@@ -259,6 +278,7 @@ pub async fn get_trace(
                     },
                     "attributes": attrs,
                     "events": events,
+                    "links": links,
                 });
 
                 if !service_spans.contains_key(&service_name) {
@@ -377,6 +397,7 @@ mod tests {
                 kind: SpanKind::Unspecified,
                 attributes: SmallVec::new(),
                 events: Vec::new(),
+                links: Vec::new(),
                 ingest_seq: 0,
             },
             Span {
@@ -392,6 +413,7 @@ mod tests {
                 kind: SpanKind::Unspecified,
                 attributes: SmallVec::new(),
                 events: Vec::new(),
+                links: Vec::new(),
                 ingest_seq: 0,
             },
         ]);

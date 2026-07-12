@@ -30,6 +30,7 @@ fn make_store() -> TraceStore {
         attributes: SmallVec::from_vec(vec![(res_svc_key, AttributeValue::String(gateway_val))]),
         kind: SpanKind::Unspecified,
         events: Vec::new(),
+        links: Vec::new(),
         ingest_seq: 0,
     };
     let span2 = Span {
@@ -45,6 +46,7 @@ fn make_store() -> TraceStore {
         attributes: SmallVec::from_vec(vec![(res_svc_key, AttributeValue::String(payments_val))]),
         kind: SpanKind::Unspecified,
         events: Vec::new(),
+        links: Vec::new(),
         ingest_seq: 0,
     };
 
@@ -63,6 +65,7 @@ fn make_store() -> TraceStore {
         attributes: SmallVec::from_vec(vec![(res_svc_key, AttributeValue::String(payments_val))]),
         kind: SpanKind::Unspecified,
         events: Vec::new(),
+        links: Vec::new(),
         ingest_seq: 0,
     };
 

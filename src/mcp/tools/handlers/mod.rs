@@ -45,6 +45,7 @@ pub(super) mod test_support {
             kind: SpanKind::Server,
             attributes: smallvec![(akey, aval), (svc_key, svc_val)],
             events: vec![],
+            links: Vec::new(),
             ingest_seq: 0,
         };
         traces.ingest_spans(vec![root]);

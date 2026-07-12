@@ -430,6 +430,7 @@ mod ingest_seq_restore_tests {
             kind: SpanKind::Unspecified,
             attributes: SmallVec::new(),
             events: Vec::new(),
+            links: Vec::new(),
             ingest_seq: 63,
         }]);
         assert_eq!(max_ingest_seq(&logs, &metrics, &traces), 63);
