@@ -54,6 +54,7 @@ struct PreparedSpan {
     start_time_ns: i64,
     duration_ns: i64,
     status: SpanStatus,
+    status_message: Option<String>,
     kind: SpanKind,
     attributes: SmallVec<[(String, PreparedAttributeValue); 8]>,
     events: Vec<PreparedEvent>,
@@ -174,6 +175,11 @@ pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> Tr
                     },
                     None => SpanStatus::Unset,
                 };
+                let status_message = otlp_span
+                    .status
+                    .as_ref()
+                    .map(|s| s.message.clone())
+                    .filter(|m| !m.is_empty());
 
                 let start_time_ns = u64_to_i64_saturating(otlp_span.start_time_unix_nano);
                 let end_time_ns = u64_to_i64_saturating(otlp_span.end_time_unix_nano);
@@ -226,6 +232,7 @@ pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> Tr
                     start_time_ns,
                     duration_ns,
                     status,
+                    status_message,
                     kind,
                     attributes,
                     events,
@@ -311,6 +318,9 @@ fn intern_prepared_span(
         start_time_ns: prepared.start_time_ns,
         duration_ns: prepared.duration_ns,
         status: prepared.status,
+        status_message: prepared
+            .status_message
+            .map(|m| store.interner.get_or_intern(m)),
         kind: prepared.kind,
         attributes,
         events,
@@ -334,4 +344,59 @@ fn intern_attribute(
         PreparedAttributeValue::Bool(b) => AttributeValue::Bool(b),
     };
     (key, value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::empty_test_state;
+    use opentelemetry_proto::tonic::resource::v1::Resource;
+    use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span, Status};
+
+    fn one_span_request(status: Option<Status>) -> ExportTraceServiceRequest {
+        ExportTraceServiceRequest {
+            resource_spans: vec![ResourceSpans {
+                resource: Some(Resource::default()),
+                scope_spans: vec![ScopeSpans {
+                    spans: vec![Span {
+                        trace_id: vec![1; 16],
+                        span_id: vec![2; 8],
+                        status,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+        }
+    }
+
+    #[test]
+    fn status_message_is_captured_when_present() {
+        let state = empty_test_state();
+        let req = one_span_request(Some(Status {
+            code: 2,
+            message: "connection refused".into(),
+        }));
+        ingest_traces(&state, req);
+        let store = state.trace_store.read();
+        let spans = store.get_trace(&[1u8; 16]).unwrap();
+        assert_eq!(spans[0].status, SpanStatus::Error);
+        let msg = spans[0].status_message.expect("status message stored");
+        assert_eq!(store.resolve(&msg), "connection refused");
+    }
+
+    #[test]
+    fn status_message_is_none_when_empty() {
+        let state = empty_test_state();
+        let req = one_span_request(Some(Status {
+            code: 2,
+            message: String::new(),
+        }));
+        ingest_traces(&state, req);
+        let store = state.trace_store.read();
+        let spans = store.get_trace(&[1u8; 16]).unwrap();
+        assert_eq!(spans[0].status, SpanStatus::Error);
+        assert!(spans[0].status_message.is_none());
+    }
 }

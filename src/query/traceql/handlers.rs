@@ -251,7 +251,11 @@ pub async fn get_trace(
                             SpanStatus::Unset => 0,
                             SpanStatus::Ok => 1,
                             SpanStatus::Error => 2,
-                        }
+                        },
+                        "message": span
+                            .status_message
+                            .map(|m| store.resolve(&m).to_string())
+                            .unwrap_or_default(),
                     },
                     "attributes": attrs,
                     "events": events,
@@ -369,6 +373,7 @@ mod tests {
                 start_time_ns: 1000,
                 duration_ns: 500,
                 status: SpanStatus::Ok,
+                status_message: None,
                 kind: SpanKind::Unspecified,
                 attributes: SmallVec::new(),
                 events: Vec::new(),
@@ -383,6 +388,7 @@ mod tests {
                 start_time_ns: 1100,
                 duration_ns: 100,
                 status: SpanStatus::Error,
+                status_message: None,
                 kind: SpanKind::Unspecified,
                 attributes: SmallVec::new(),
                 events: Vec::new(),

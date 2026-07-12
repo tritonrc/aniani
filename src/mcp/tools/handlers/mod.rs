@@ -41,6 +41,7 @@ pub(super) mod test_support {
             start_time_ns: 0,
             duration_ns: 5_000_000,
             status: SpanStatus::Error,
+            status_message: None,
             kind: SpanKind::Server,
             attributes: smallvec![(akey, aval), (svc_key, svc_val)],
             events: vec![],

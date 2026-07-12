@@ -26,6 +26,7 @@ fn make_store() -> TraceStore {
         start_time_ns: 1_000_000_000,
         duration_ns: 500_000_000, // 500ms
         status: SpanStatus::Ok,
+        status_message: None,
         attributes: SmallVec::from_vec(vec![(res_svc_key, AttributeValue::String(gateway_val))]),
         kind: SpanKind::Unspecified,
         events: Vec::new(),
@@ -40,6 +41,7 @@ fn make_store() -> TraceStore {
         start_time_ns: 1_100_000_000,
         duration_ns: 300_000_000, // 300ms
         status: SpanStatus::Error,
+        status_message: None,
         attributes: SmallVec::from_vec(vec![(res_svc_key, AttributeValue::String(payments_val))]),
         kind: SpanKind::Unspecified,
         events: Vec::new(),
@@ -57,6 +59,7 @@ fn make_store() -> TraceStore {
         start_time_ns: 2_000_000_000,
         duration_ns: 2_000_000_000, // 2s
         status: SpanStatus::Ok,
+        status_message: None,
         attributes: SmallVec::from_vec(vec![(res_svc_key, AttributeValue::String(payments_val))]),
         kind: SpanKind::Unspecified,
         events: Vec::new(),

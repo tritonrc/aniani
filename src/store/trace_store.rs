@@ -89,6 +89,10 @@ pub struct Span {
     pub start_time_ns: i64,
     pub duration_ns: i64,
     pub status: SpanStatus,
+    /// OTLP `Status.message` — the human-readable error description carried
+    /// alongside `status = error`. `None` when unset or for non-error statuses.
+    #[serde(default)]
+    pub status_message: Option<Spur>,
     pub kind: SpanKind,
     pub attributes: SmallVec<[(Spur, AttributeValue); 8]>,
     pub events: Vec<SpanEvent>,

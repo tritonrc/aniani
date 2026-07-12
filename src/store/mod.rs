@@ -426,6 +426,7 @@ mod ingest_seq_restore_tests {
             start_time_ns: 1000,
             duration_ns: 100,
             status: SpanStatus::Ok,
+            status_message: None,
             kind: SpanKind::Unspecified,
             attributes: SmallVec::new(),
             events: Vec::new(),
