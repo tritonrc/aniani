@@ -24,16 +24,25 @@ pub struct LokiPushRequest {
 
 /// A single stream in the Loki push format.
 ///
-/// Loki push values are arrays of `[timestamp_ns, line]` or `[timestamp_ns, line, metadata]`.
-/// We accept both forms.
+/// Loki push values are arrays of `[timestamp_ns, line]` or
+/// `[timestamp_ns, line, metadata]` where metadata is a JSON object of
+/// structured per-entry key-value pairs. We accept both forms.
 #[derive(Debug, Deserialize)]
 pub struct LokiStream {
     pub stream: serde_json::Map<String, serde_json::Value>,
     #[serde(deserialize_with = "deserialize_log_values")]
-    pub values: Vec<(String, String)>,
+    pub values: Vec<LokiValue>,
 }
 
-fn deserialize_log_values<'de, D>(deserializer: D) -> Result<Vec<(String, String)>, D::Error>
+/// A single Loki log value: `(timestamp, line, optional metadata)`.
+#[derive(Debug)]
+pub struct LokiValue {
+    pub ts: String,
+    pub line: String,
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+fn deserialize_log_values<'de, D>(deserializer: D) -> Result<Vec<LokiValue>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -51,7 +60,11 @@ where
                     serde_json::Value::String(s) => s.clone(),
                     other => other.to_string(),
                 };
-                Some((ts, line))
+                let metadata = entry.get(2).and_then(|v| match v {
+                    serde_json::Value::Object(map) => Some(map.clone()),
+                    _ => None,
+                });
+                Some(LokiValue { ts, line, metadata })
             } else {
                 None
             }
@@ -154,7 +167,10 @@ fn decode_snappy_json(body: &[u8]) -> Result<LokiPushRequest, anyhow::Error> {
 
 /// Ingest a Loki push request. Returns `(stream_count, entry_count)`.
 fn ingest_loki_push(state: &SharedState, request: LokiPushRequest) -> (usize, usize) {
-    type StreamData = (Vec<(String, String)>, Vec<LogEntry>);
+    use crate::store::trace_store::AttributeValue;
+
+    type RawMeta = Vec<(String, String)>;
+    type StreamData = (Vec<(String, String)>, Vec<(LogEntry, RawMeta)>);
     let prepared: Vec<StreamData> = request
         .streams
         .into_iter()
@@ -170,23 +186,34 @@ fn ingest_loki_push(state: &SharedState, request: LokiPushRequest) -> (usize, us
                     (k, val)
                 })
                 .collect();
-            let entries: Vec<LogEntry> = stream
+            let entries: Vec<(LogEntry, RawMeta)> = stream
                 .values
                 .into_iter()
-                .filter_map(|(ts_str, line)| {
-                    let timestamp_ns: i64 = ts_str.parse().ok()?;
-                    Some(LogEntry {
-                        timestamp_ns,
-                        line,
-                        ingest_seq: state
-                            .ingest_seq
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                        trace_id: None,
-                        span_id: None,
-                        severity_number: 0,
-                        severity_text: None,
-                        attributes: SmallVec::new(),
-                    })
+                .filter_map(|val| {
+                    let timestamp_ns: i64 = val.ts.parse().ok()?;
+                    // Extract structured metadata: trace_id and span_id go
+                    // to first-class fields, everything else becomes a
+                    // per-entry string attribute.
+                    let (trace_id, span_id, attrs) = val
+                        .metadata
+                        .as_ref()
+                        .map(parse_loki_metadata)
+                        .unwrap_or((None, None, Vec::new()));
+                    Some((
+                        LogEntry {
+                            timestamp_ns,
+                            line: val.line,
+                            ingest_seq: state
+                                .ingest_seq
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                            trace_id,
+                            span_id,
+                            severity_number: 0,
+                            severity_text: None,
+                            attributes: SmallVec::new(),
+                        },
+                        attrs,
+                    ))
                 })
                 .collect();
             (labels, entries)
@@ -197,9 +224,73 @@ fn ingest_loki_push(state: &SharedState, request: LokiPushRequest) -> (usize, us
     let entry_count: usize = prepared.iter().map(|(_, entries)| entries.len()).sum();
 
     let mut store = state.log_store.write();
-    for (labels, entries) in prepared {
+    for (labels, mut entries) in prepared {
+        for (entry, raw_attrs) in entries.iter_mut() {
+            for (key, val) in raw_attrs.drain(..) {
+                let key_spur = store.interner.get_or_intern(key);
+                let attr_val = AttributeValue::String(store.interner.get_or_intern(val));
+                entry.attributes.push((key_spur, attr_val));
+            }
+        }
+        let entries: Vec<LogEntry> = entries.into_iter().map(|(e, _)| e).collect();
         store.ingest_stream(labels, entries);
     }
 
     (stream_count, entry_count)
+}
+
+/// Parsed Loki structured metadata: trace/span correlation IDs + remaining
+/// key-value pairs stored as per-entry string attributes.
+type ParsedMeta = (Option<[u8; 16]>, Option<[u8; 8]>, Vec<(String, String)>);
+
+/// Parse Loki structured metadata into `(trace_id, span_id, attributes)`.
+///
+/// `trace_id` / `span_id` are hex-decoded if present and valid. All other
+/// metadata entries become `(String, String)` pairs for per-entry attributes.
+fn parse_loki_metadata(metadata: &serde_json::Map<String, serde_json::Value>) -> ParsedMeta {
+    let mut trace_id = None;
+    let mut span_id = None;
+    let mut attrs = Vec::new();
+
+    for (k, v) in metadata {
+        let val_str = match v {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        match k.as_str() {
+            "trace_id" | "traceId" => {
+                trace_id = parse_hex_trace_id(&val_str);
+            }
+            "span_id" | "spanId" => {
+                span_id = parse_hex_span_id(&val_str);
+            }
+            _ => attrs.push((k.clone(), val_str)),
+        }
+    }
+
+    (trace_id, span_id, attrs)
+}
+
+fn parse_hex_trace_id(s: &str) -> Option<[u8; 16]> {
+    let b = s.as_bytes();
+    if b.len() != 32 {
+        return None;
+    }
+    let mut bytes = [0u8; 16];
+    for i in 0..16 {
+        bytes[i] = u8::from_str_radix(std::str::from_utf8(&b[i * 2..i * 2 + 2]).ok()?, 16).ok()?;
+    }
+    Some(bytes)
+}
+
+fn parse_hex_span_id(s: &str) -> Option<[u8; 8]> {
+    let b = s.as_bytes();
+    if b.len() != 16 {
+        return None;
+    }
+    let mut bytes = [0u8; 8];
+    for i in 0..8 {
+        bytes[i] = u8::from_str_radix(std::str::from_utf8(&b[i * 2..i * 2 + 2]).ok()?, 16).ok()?;
+    }
+    Some(bytes)
 }
