@@ -191,50 +191,68 @@ fn eval_structural(
     rhs: &TraceQLExpr,
     store: &TraceStore,
 ) -> Vec<TraceResult> {
-    match op {
-        StructuralOp::Descendant => {
-            let lhs_results = evaluate_traceql(lhs, store);
-            let rhs_results = evaluate_traceql(rhs, store);
+    let lhs_results = evaluate_traceql(lhs, store);
+    let rhs_results = evaluate_traceql(rhs, store);
 
-            // Find traces where an lhs span is an ancestor of an rhs span
-            let mut results = Vec::new();
+    let rhs_by_trace: FxHashMap<[u8; 16], &TraceResult> =
+        rhs_results.iter().map(|r| (r.trace_id, r)).collect();
 
-            let rhs_by_trace: FxHashMap<[u8; 16], &TraceResult> =
-                rhs_results.iter().map(|r| (r.trace_id, r)).collect();
+    let mut results = Vec::new();
+    for lhs_result in &lhs_results {
+        let Some(rhs_result) = rhs_by_trace.get(&lhs_result.trace_id) else {
+            continue;
+        };
+        let Some(trace_spans) = store.get_trace(&lhs_result.trace_id) else {
+            continue;
+        };
+        // Build span_map once per trace for parent lookups.
+        let span_map: FxHashMap<[u8; 8], &Span> =
+            trace_spans.iter().map(|s| (s.span_id, s)).collect();
 
-            for lhs_result in &lhs_results {
-                if let Some(rhs_result) = rhs_by_trace.get(&lhs_result.trace_id)
-                    && let Some(trace_spans) = store.get_trace(&lhs_result.trace_id)
-                {
-                    // Build span_map ONCE per trace, not per pair
-                    let span_map: FxHashMap<[u8; 8], &Span> =
-                        trace_spans.iter().map(|s| (s.span_id, s)).collect();
-
-                    let mut matched = Vec::new();
-
-                    for lhs_span in &lhs_result.matched_spans {
-                        for rhs_span in &rhs_result.matched_spans {
-                            if is_descendant(lhs_span.span_id, rhs_span.span_id, &span_map) {
-                                matched.push(rhs_span.clone());
-                            }
-                        }
+        let mut matched = Vec::new();
+        for lhs_span in &lhs_result.matched_spans {
+            for rhs_span in &rhs_result.matched_spans {
+                let related = match op {
+                    StructuralOp::Descendant => {
+                        is_descendant(lhs_span.span_id, rhs_span.span_id, &span_map)
                     }
-
-                    if !matched.is_empty() {
-                        // Deduplicate
-                        matched.sort_by_key(|s| s.span_id);
-                        matched.dedup_by_key(|s| s.span_id);
-                        results.push(TraceResult {
-                            trace_id: lhs_result.trace_id,
-                            matched_spans: matched,
-                        });
+                    StructuralOp::Child => is_child(lhs_span.span_id, rhs_span.span_id, &span_map),
+                    StructuralOp::Sibling => {
+                        is_sibling(lhs_span.span_id, rhs_span.span_id, &span_map)
                     }
+                };
+                if related {
+                    matched.push(rhs_span.clone());
                 }
             }
+        }
 
-            results
+        if !matched.is_empty() {
+            matched.sort_by_key(|s| s.span_id);
+            matched.dedup_by_key(|s| s.span_id);
+            results.push(TraceResult {
+                trace_id: lhs_result.trace_id,
+                matched_spans: matched,
+            });
         }
     }
+
+    results
+}
+
+/// Check if `parent_id` is the direct parent of `child_id`.
+fn is_child(parent_id: [u8; 8], child_id: [u8; 8], span_map: &FxHashMap<[u8; 8], &Span>) -> bool {
+    span_map.get(&child_id).and_then(|s| s.parent_span_id) == Some(parent_id)
+}
+
+/// Check if `a_id` and `b_id` share the same parent (and are distinct spans).
+fn is_sibling(a_id: [u8; 8], b_id: [u8; 8], span_map: &FxHashMap<[u8; 8], &Span>) -> bool {
+    if a_id == b_id {
+        return false;
+    }
+    let a_parent = span_map.get(&a_id).and_then(|s| s.parent_span_id);
+    let b_parent = span_map.get(&b_id).and_then(|s| s.parent_span_id);
+    a_parent == b_parent
 }
 
 /// Check if `ancestor_span_id` is an ancestor of `descendant_span_id`.

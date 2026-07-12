@@ -65,6 +65,10 @@ pub enum PipelineStage {
 pub enum StructuralOp {
     /// `>>` descendant
     Descendant,
+    /// `>` direct child
+    Child,
+    /// `~` sibling (shared parent)
+    Sibling,
 }
 
 /// A condition within a span selector.
@@ -188,14 +192,14 @@ fn parse_top_level(input: &str) -> IResult<&str, TraceQLExpr> {
     let (input, lhs) = parse_span_selector(input)?;
     let (input, _) = multispace0(input)?;
 
-    // Check for structural operator
-    if let Ok((input, _)) = tag::<&str, &str, nom::error::Error<&str>>(">>")(input) {
+    // Check for structural operator (>> must be tried before >).
+    if let Ok((input, op)) = parse_structural_op(input) {
         let (input, _) = multispace0(input)?;
         let (input, rhs) = parse_span_selector(input)?;
         Ok((
             input,
             TraceQLExpr::Structural {
-                op: StructuralOp::Descendant,
+                op,
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
             },
@@ -203,6 +207,17 @@ fn parse_top_level(input: &str) -> IResult<&str, TraceQLExpr> {
     } else {
         Ok((input, lhs))
     }
+}
+
+/// Parse a structural operator between two span selectors. Order matters:
+/// `>>` is tried before `>` so it isn't shadow-parsed as two child ops.
+fn parse_structural_op(input: &str) -> IResult<&str, StructuralOp> {
+    alt((
+        map(tag(">>"), |_| StructuralOp::Descendant),
+        map(tag(">"), |_| StructuralOp::Child),
+        map(tag("~"), |_| StructuralOp::Sibling),
+    ))
+    .parse_complete(input)
 }
 
 fn parse_span_selector(input: &str) -> IResult<&str, TraceQLExpr> {

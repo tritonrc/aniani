@@ -116,6 +116,121 @@ fn test_eval_structural_descendant() {
 }
 
 #[test]
+fn test_eval_structural_child() {
+    let store = make_store();
+    // span1 (gateway) is the direct parent of span2 (payments).
+    let expr = crate::query::traceql::parser::parse_traceql(
+        r#"{ resource.service.name = "gateway" } > { resource.service.name = "payments" }"#,
+    )
+    .unwrap();
+    let results = evaluate_traceql(&expr, &store);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].matched_spans[0].service_name, "payments");
+}
+
+#[test]
+fn test_eval_structural_sibling() {
+    let mut store = TraceStore::new();
+    let tid = [6u8; 16];
+    let svc = store.interner.get_or_intern("svc");
+    let res_key = store.interner.get_or_intern("resource.service.name");
+    let parent_op = store.interner.get_or_intern("parent");
+    let a_op = store.interner.get_or_intern("child-a");
+    let b_op = store.interner.get_or_intern("child-b");
+    let unrelated_op = store.interner.get_or_intern("unrelated");
+    let root_val = store.interner.get_or_intern("root");
+    let a_val = store.interner.get_or_intern("a");
+    let b_val = store.interner.get_or_intern("b");
+    let c_val = store.interner.get_or_intern("c");
+    // Two siblings under the same parent, plus an unrelated root span.
+    store.ingest_spans(vec![
+        Span {
+            trace_id: tid,
+            span_id: [0, 0, 0, 0, 0, 0, 0, 0],
+            parent_span_id: None,
+            name: parent_op,
+            service_name: svc,
+            start_time_ns: 0,
+            duration_ns: 100,
+            status: SpanStatus::Ok,
+            status_message: None,
+            attributes: SmallVec::from_vec(vec![(res_key, AttributeValue::String(root_val))]),
+            events: Vec::new(),
+            links: Vec::new(),
+            kind: SpanKind::Server,
+            ingest_seq: 0,
+        },
+        Span {
+            trace_id: tid,
+            span_id: [1, 0, 0, 0, 0, 0, 0, 0],
+            parent_span_id: Some([0, 0, 0, 0, 0, 0, 0, 0]),
+            name: a_op,
+            service_name: svc,
+            start_time_ns: 1,
+            duration_ns: 10,
+            status: SpanStatus::Ok,
+            status_message: None,
+            attributes: SmallVec::from_vec(vec![(res_key, AttributeValue::String(a_val))]),
+            events: Vec::new(),
+            links: Vec::new(),
+            kind: SpanKind::Internal,
+            ingest_seq: 0,
+        },
+        Span {
+            trace_id: tid,
+            span_id: [2, 0, 0, 0, 0, 0, 0, 0],
+            parent_span_id: Some([0, 0, 0, 0, 0, 0, 0, 0]),
+            name: b_op,
+            service_name: svc,
+            start_time_ns: 2,
+            duration_ns: 10,
+            status: SpanStatus::Ok,
+            status_message: None,
+            attributes: SmallVec::from_vec(vec![(res_key, AttributeValue::String(b_val))]),
+            events: Vec::new(),
+            links: Vec::new(),
+            kind: SpanKind::Internal,
+            ingest_seq: 0,
+        },
+        Span {
+            trace_id: tid,
+            span_id: [3, 0, 0, 0, 0, 0, 0, 0],
+            parent_span_id: None,
+            name: unrelated_op,
+            service_name: svc,
+            start_time_ns: 3,
+            duration_ns: 10,
+            status: SpanStatus::Ok,
+            status_message: None,
+            attributes: SmallVec::from_vec(vec![(res_key, AttributeValue::String(c_val))]),
+            events: Vec::new(),
+            links: Vec::new(),
+            kind: SpanKind::Internal,
+            ingest_seq: 0,
+        },
+    ]);
+
+    // a ~ b: child-a and child-b are siblings (same parent). Matches child-b.
+    let expr = crate::query::traceql::parser::parse_traceql(
+        r#"{ resource.service.name = "a" } ~ { resource.service.name = "b" }"#,
+    )
+    .unwrap();
+    let results = evaluate_traceql(&expr, &store);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].matched_spans.len(), 1);
+    assert_eq!(results[0].matched_spans[0].service_name, "svc");
+    assert_eq!(results[0].matched_spans[0].name, "child-b");
+
+    // root ~ c share parent=None, so they are siblings too.
+    let root_expr = crate::query::traceql::parser::parse_traceql(
+        r#"{ resource.service.name = "root" } ~ { resource.service.name = "c" }"#,
+    )
+    .unwrap();
+    let root_results = evaluate_traceql(&root_expr, &store);
+    assert_eq!(root_results.len(), 1);
+}
+
+#[test]
 fn test_eval_combined_conditions() {
     let store = make_store();
     let expr = crate::query::traceql::parser::parse_traceql(

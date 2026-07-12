@@ -141,6 +141,21 @@ fn test_structural_descendant() {
 }
 
 #[test]
+fn test_structural_child_and_sibling() {
+    let child = parse_traceql(r#"{ kind = server } > { kind = client }"#).unwrap();
+    match child {
+        TraceQLExpr::Structural { op, .. } => assert_eq!(op, StructuralOp::Child),
+        _ => panic!("expected Structural"),
+    }
+
+    let sibling = parse_traceql(r#"{ name = "a" } ~ { name = "b" }"#).unwrap();
+    match sibling {
+        TraceQLExpr::Structural { op, .. } => assert_eq!(op, StructuralOp::Sibling),
+        _ => panic!("expected Structural"),
+    }
+}
+
+#[test]
 fn test_span_attribute_int() {
     let expr = parse_traceql(r#"{ span.http.status_code = 500 }"#).unwrap();
     match expr {
