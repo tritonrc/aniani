@@ -190,7 +190,7 @@ fn ingest_loki_push(state: &SharedState, request: LokiPushRequest) -> (usize, us
                 .values
                 .into_iter()
                 .filter_map(|val| {
-                    let timestamp_ns: i64 = val.ts.parse().ok()?;
+                    let timestamp_ns: i64 = super::parse_timestamp_ns(&val.ts)?;
                     // Extract structured metadata: trace_id and span_id go
                     // to first-class fields, everything else becomes a
                     // per-entry string attribute.

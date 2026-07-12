@@ -348,42 +348,11 @@ fn now_ns() -> i64 {
 }
 
 fn parse_timestamp_ns(s: &str) -> Option<i64> {
-    // Try integer first (preserves precision for nanosecond timestamps)
-    if let Ok(n) = s.parse::<i64>() {
-        return Some(classify_to_ns(n));
-    }
-    // Try float seconds (e.g., "1700000000.5")
-    if let Ok(secs) = s.parse::<f64>() {
-        return float_seconds_to_ns(secs);
-    }
-    None
+    crate::ingest::parse_timestamp_ns(s)
 }
 
 fn bounded_limit(limit: Option<usize>) -> usize {
     limit.unwrap_or(DEFAULT_ENTRY_LIMIT).min(MAX_ENTRY_LIMIT)
-}
-
-fn float_seconds_to_ns(secs: f64) -> Option<i64> {
-    const NS_PER_SEC: f64 = 1_000_000_000.0;
-    if !secs.is_finite()
-        || secs > i64::MAX as f64 / NS_PER_SEC
-        || secs < i64::MIN as f64 / NS_PER_SEC
-    {
-        return None;
-    }
-    Some((secs * NS_PER_SEC) as i64)
-}
-
-fn classify_to_ns(n: i64) -> i64 {
-    if n > 1_000_000_000_000_000_000 {
-        n // already nanoseconds
-    } else if n > 1_000_000_000_000_000 {
-        n.saturating_mul(1_000) // microseconds -> ns
-    } else if n > 1_000_000_000_000 {
-        n.saturating_mul(1_000_000) // milliseconds -> ns
-    } else {
-        n.saturating_mul(1_000_000_000) // seconds -> ns
-    }
 }
 
 #[cfg(test)]
