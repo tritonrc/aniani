@@ -302,3 +302,37 @@ fn test_eval_by_event_name_and_attribute() {
     let neq_results = evaluate_traceql(&neq_expr, &store);
     assert_eq!(neq_results.len(), 1);
 }
+
+#[test]
+fn test_eval_by_boolean_attribute() {
+    let mut store = TraceStore::new();
+    let tid = [8u8; 16];
+    let svc = store.interner.get_or_intern("svc");
+    let op = store.interner.get_or_intern("job");
+    let key = store.interner.get_or_intern("span.retry");
+    store.ingest_spans(vec![Span {
+        trace_id: tid,
+        span_id: [1, 0, 0, 0, 0, 0, 0, 0],
+        parent_span_id: None,
+        name: op,
+        service_name: svc,
+        start_time_ns: 0,
+        duration_ns: 10,
+        status: SpanStatus::Ok,
+        status_message: None,
+        attributes: SmallVec::from_vec(vec![(key, AttributeValue::Bool(true))]),
+        events: Vec::new(),
+        links: Vec::new(),
+        kind: SpanKind::Internal,
+        ingest_seq: 0,
+    }]);
+
+    let eq_expr = crate::query::traceql::parser::parse_traceql("{ span.retry = true }").unwrap();
+    let eq_results = evaluate_traceql(&eq_expr, &store);
+    assert_eq!(eq_results.len(), 1);
+
+    let false_expr =
+        crate::query::traceql::parser::parse_traceql("{ span.retry = false }").unwrap();
+    let false_results = evaluate_traceql(&false_expr, &store);
+    assert!(false_results.is_empty());
+}

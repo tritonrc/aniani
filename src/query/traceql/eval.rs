@@ -463,6 +463,11 @@ fn compare_attribute_value(
                 false
             }
         }
+        (AttributeValue::Bool(b), SpanValue::Bool(t)) => match op {
+            CompareOp::Eq => b == t,
+            CompareOp::Neq => b != t,
+            _ => false,
+        },
         _ => false,
     }
 }

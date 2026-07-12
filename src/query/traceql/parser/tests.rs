@@ -335,7 +335,6 @@ fn test_event_name_selector() {
         _ => panic!("expected SpanSelector"),
     }
 }
-
 #[test]
 fn test_event_attribute_selector() {
     let expr = parse_traceql(r#"{ event.exception.type = "ConnectionError" }"#).unwrap();
@@ -350,4 +349,30 @@ fn test_event_attribute_selector() {
         },
         _ => panic!("expected SpanSelector"),
     }
+}
+
+#[test]
+fn test_boolean_literal_value() {
+    for (q, expected) in [
+        (r#"{ span.flag = true }"#, true),
+        (r#"{ span.flag = false }"#, false),
+    ] {
+        let expr = parse_traceql(q).unwrap();
+        match expr {
+            TraceQLExpr::SpanSelector { conditions, .. } => match &conditions[0] {
+                SpanCondition::Attribute { value, .. } => {
+                    assert_eq!(*value, SpanValue::Bool(expected), "failed for: {}", q);
+                }
+                _ => panic!("expected Attribute"),
+            },
+            _ => panic!("expected SpanSelector"),
+        }
+    }
+}
+
+#[test]
+fn test_boolean_keyword_is_not_truncated_by_identifier() {
+    // RHS identifiers that merely start with true/false must not parse as bools.
+    assert!(parse_traceql(r#"{ span.x = truely }"#).is_err());
+    assert!(parse_traceql(r#"{ span.x = falsehood }"#).is_err());
 }

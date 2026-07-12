@@ -126,6 +126,7 @@ pub enum SpanValue {
     String(String),
     Int(i64),
     Float(f64),
+    Bool(bool),
 }
 
 /// Logical operators between conditions.
@@ -447,9 +448,26 @@ pub(super) fn parse_compare_op(input: &str) -> IResult<&str, CompareOp> {
 fn parse_span_value(input: &str) -> IResult<&str, SpanValue> {
     alt((
         map(parse_quoted_string, SpanValue::String),
+        parse_bool_value,
         parse_numeric_value,
     ))
     .parse_complete(input)
+}
+
+/// Parse a bare `true` / `false` literal, rejecting identifiers that merely
+/// start with those words (e.g. `trueish`).
+fn parse_bool_value(input: &str) -> IResult<&str, SpanValue> {
+    let (rest, word) = alt((
+        tag::<&str, &str, nom::error::Error<&str>>("true"),
+        tag("false"),
+    ))
+    .parse_complete(input)?;
+    match rest.chars().next() {
+        Some(c) if c.is_alphanumeric() || c == '_' || c == '.' => Err(nom::Err::Error(
+            nom::error::Error::new(input, nom::error::ErrorKind::Tag),
+        )),
+        _ => Ok((rest, SpanValue::Bool(word == "true"))),
+    }
 }
 
 fn parse_numeric_value(input: &str) -> IResult<&str, SpanValue> {
