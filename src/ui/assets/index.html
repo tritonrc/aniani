@@ -7,16 +7,13 @@
     <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='8'%20fill='%234ea1ff'/%3E%3Ctext%20x='16'%20y='23'%20font-family='sans-serif'%20font-size='20'%20font-weight='bold'%20text-anchor='middle'%20fill='%23fff'%3Ea%3C/text%3E%3C/svg%3E" />
     <link rel="stylesheet" href="/ui/assets/style.css" />
     <!--
-      Vue is loaded from a pinned CDN URL (no build step). Import maps do not yet
-      support Subresource Integrity, so there is no integrity hash; the version is
-      pinned to limit risk. Trade-off: the first load needs internet access and
-      trusts the CDN. Bundling Vue into the embedded assets would remove both, but
-      requires a build step this UI intentionally avoids.
+      Vue is vendored locally (no build step, no CDN, works offline). The ESM
+      build is pinned at 3.5.13 under /ui/assets/vendor/.
     -->
     <script type="importmap">
       {
         "imports": {
-          "vue": "https://unpkg.com/vue@3.5.13/dist/vue.esm-browser.prod.js"
+          "vue": "/ui/assets/vendor/vue.esm-browser.prod.js"
         }
       }
     </script>
