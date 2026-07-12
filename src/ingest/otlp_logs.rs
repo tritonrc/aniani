@@ -108,7 +108,8 @@ pub fn ingest_logs(state: &AppState, request: ExportLogsServiceRequest) -> usize
                     timestamp_ns,
                     line,
                     ingest_seq: state.ingest_seq.fetch_add(1, Ordering::Relaxed),
-                    trace_id: trace_id_hex(&log_record.trace_id),
+                    trace_id: trace_id_bytes(&log_record.trace_id),
+                    span_id: span_id_bytes(&log_record.span_id),
                     attributes: SmallVec::new(),
                 };
 
@@ -150,23 +151,32 @@ pub fn ingest_logs(state: &AppState, request: ExportLogsServiceRequest) -> usize
     entry_count
 }
 
-/// Hex-encode a trace id from an OTLP log record.
+/// Extract a 16-byte trace id from an OTLP log record.
 ///
-/// Returns `None` for an empty id and for an all-zero id: OTLP allows all-zero
-/// bytes but treats them as semantically "no trace" (the same convention the
-/// trace ingestion path uses for absent parent span ids).
-fn trace_id_hex(trace_id: &[u8]) -> Option<String> {
-    use std::fmt::Write;
+/// Returns `None` for an empty id, an all-zero id, or an id that is not
+/// exactly 16 bytes (malformed). OTLP allows all-zero bytes but treats them
+/// as semantically "no trace" (same convention as trace ingestion).
+fn trace_id_bytes(trace_id: &[u8]) -> Option<[u8; 16]> {
+    if trace_id.len() == 16 && !trace_id.iter().all(|&b| b == 0) {
+        let mut buf = [0u8; 16];
+        buf.copy_from_slice(trace_id);
+        Some(buf)
+    } else {
+        None
+    }
+}
 
-    if trace_id.is_empty() || trace_id.iter().all(|&b| b == 0) {
-        return None;
+/// Extract an 8-byte span id from an OTLP log record.
+///
+/// Returns `None` for empty, all-zero, or wrong-length span ids.
+fn span_id_bytes(span_id: &[u8]) -> Option<[u8; 8]> {
+    if span_id.len() == 8 && !span_id.iter().all(|&b| b == 0) {
+        let mut buf = [0u8; 8];
+        buf.copy_from_slice(span_id);
+        Some(buf)
+    } else {
+        None
     }
-    let mut hex = String::with_capacity(trace_id.len() * 2);
-    for b in trace_id {
-        // Writing to a String is infallible; there's nothing to propagate.
-        let _ = write!(hex, "{b:02x}");
-    }
-    Some(hex)
 }
 
 fn current_time_ns() -> i64 {
@@ -391,8 +401,11 @@ mod ingest_seq_tests {
             .first()
             .unwrap();
         assert_eq!(
-            entry.trace_id.as_deref(),
-            Some("000102030405060708090a0b0c0d0e0f")
+            entry.trace_id,
+            Some([
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+                0x0e, 0x0f
+            ])
         );
     }
 

@@ -20,9 +20,14 @@ pub struct LogEntry {
     /// Global monotonic ingest sequence; assigned on store insert.
     #[serde(default)]
     pub ingest_seq: u64,
-    /// Lowercase hex trace id from OTLP logs; `None` for Loki-push entries.
+    /// W3C trace id (16 bytes, all-zero absent). Hex-encoded at the
+    /// presentation layer, not here.
     #[serde(default)]
-    pub trace_id: Option<String>,
+    pub trace_id: Option<[u8; 16]>,
+    /// W3C span id (8 bytes, all-zero absent). Hex-encoded at the
+    /// presentation layer.
+    #[serde(default)]
+    pub span_id: Option<[u8; 8]>,
     /// Per-entry structured attributes (typed, interned). OTLP
     /// `LogRecord.attributes` land here instead of being promoted to stream
     /// labels, avoiding cardinality explosion from high-cardinality keys.

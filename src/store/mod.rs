@@ -384,7 +384,7 @@ mod ingest_seq_restore_tests {
                 line: "x".into(),
                 ingest_seq: 41,
                 trace_id: None,
-
+                span_id: None,
                 attributes: SmallVec::new(),
             }],
         );

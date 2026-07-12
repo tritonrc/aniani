@@ -129,7 +129,7 @@ mod tests {
                     line: "x".into(),
                     ingest_seq: 0,
                     trace_id: None,
-
+                    span_id: None,
                     attributes: SmallVec::new(),
                 }],
             );

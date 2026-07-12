@@ -160,7 +160,7 @@ mod tests {
                     line: "x".into(),
                     ingest_seq: 0,
                     trace_id: None,
-
+                    span_id: None,
                     attributes: SmallVec::new(),
                 }],
             );
@@ -213,7 +213,7 @@ mod tests {
                     line: "boom".into(),
                     ingest_seq: 0,
                     trace_id: None,
-
+                    span_id: None,
                     attributes: SmallVec::new(),
                 }],
             );
@@ -263,7 +263,7 @@ mod tests {
                     line: "x".into(),
                     ingest_seq: 0,
                     trace_id: None,
-
+                    span_id: None,
                     attributes: SmallVec::new(),
                 }],
             );
@@ -303,7 +303,7 @@ mod tests {
                     line: "x".into(),
                     ingest_seq: 0,
                     trace_id: None,
-
+                    span_id: None,
                     attributes: SmallVec::new(),
                 }],
             );
@@ -364,7 +364,7 @@ mod tests {
                 line: format!("line {i}"),
                 ingest_seq: 0,
                 trace_id: None,
-
+                span_id: None,
                 attributes: SmallVec::new(),
             })
             .collect();

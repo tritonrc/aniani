@@ -147,7 +147,7 @@ mod tests {
                 line: "hello".into(),
                 ingest_seq: 0,
                 trace_id: None,
-
+                span_id: None,
                 attributes: SmallVec::new(),
             }],
         );
@@ -185,7 +185,7 @@ mod tests {
                 line: "hello".into(),
                 ingest_seq: 99,
                 trace_id: None,
-
+                span_id: None,
                 attributes: SmallVec::new(),
             }],
         );

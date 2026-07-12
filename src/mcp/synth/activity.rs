@@ -282,7 +282,7 @@ mod tests {
                         line: "boom1".into(),
                         ingest_seq: 0,
                         trace_id: None,
-
+                        span_id: None,
                         attributes: SmallVec::new(),
                     },
                     LogEntry {
@@ -290,7 +290,7 @@ mod tests {
                         line: "boom2".into(),
                         ingest_seq: 5,
                         trace_id: None,
-
+                        span_id: None,
                         attributes: SmallVec::new(),
                     },
                 ],
@@ -344,7 +344,7 @@ mod tests {
                     line: "ok".into(),
                     ingest_seq: 0,
                     trace_id: None,
-
+                    span_id: None,
                     attributes: SmallVec::new(),
                 }],
             );
@@ -358,7 +358,7 @@ mod tests {
                     line: "bad".into(),
                     ingest_seq: 1,
                     trace_id: None,
-
+                    span_id: None,
                     attributes: SmallVec::new(),
                 }],
             );

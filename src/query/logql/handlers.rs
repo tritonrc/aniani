@@ -255,7 +255,7 @@ fn format_logql_result(result: LogQLResult, limit: usize) -> Value {
                 }
                 // Re-sort each stream's entries by timestamp ascending
                 for sr in &mut streams {
-                    sr.entries.sort_by_key(|(ts, _, _, _)| *ts);
+                    sr.entries.sort_by_key(|(ts, _, _, _, _)| *ts);
                 }
             }
 
@@ -271,22 +271,25 @@ fn format_logql_result(result: LogQLResult, limit: usize) -> Value {
                     // Loki structured-metadata shape: a 2-element array when there is
                     // no trace id (matches vanilla Loki), 3-element with a
                     // `{"trace_id": ...}` metadata object when there is one.
-                    let values: Vec<Value> = sr
-                        .entries
-                        .into_iter()
-                        .map(|(ts, line, trace_id, attrs)| {
-                            let metadata: serde_json::Map<String, Value> = trace_id
-                                .iter()
-                                .map(|tid| ("trace_id".to_string(), Value::String(tid.clone())))
-                                .chain(attrs.into_iter().map(|(k, v)| (k, Value::String(v))))
-                                .collect();
-                            if metadata.is_empty() {
-                                json!([ts.to_string(), line])
-                            } else {
-                                json!([ts.to_string(), line, metadata])
-                            }
-                        })
-                        .collect();
+                    let values: Vec<Value> =
+                        sr.entries
+                            .into_iter()
+                            .map(|(ts, line, trace_id, span_id, attrs)| {
+                                let metadata: serde_json::Map<String, Value> = trace_id
+                                    .iter()
+                                    .map(|tid| ("trace_id".to_string(), Value::String(tid.clone())))
+                                    .chain(span_id.iter().map(|sid| {
+                                        ("span_id".to_string(), Value::String(sid.clone()))
+                                    }))
+                                    .chain(attrs.into_iter().map(|(k, v)| (k, Value::String(v))))
+                                    .collect();
+                                if metadata.is_empty() {
+                                    json!([ts.to_string(), line])
+                                } else {
+                                    json!([ts.to_string(), line, metadata])
+                                }
+                            })
+                            .collect();
                     json!({
                         "stream": labels_map,
                         "values": values,

@@ -15,7 +15,7 @@ fn make_store() -> LogStore {
                 line: "connection timeout to bank API".into(),
                 ingest_seq: 0,
                 trace_id: None,
-
+                span_id: None,
                 attributes: SmallVec::new(),
             },
             LogEntry {
@@ -23,7 +23,7 @@ fn make_store() -> LogStore {
                 line: "retry 1/3 failed".into(),
                 ingest_seq: 0,
                 trace_id: None,
-
+                span_id: None,
                 attributes: SmallVec::new(),
             },
             LogEntry {
@@ -31,7 +31,7 @@ fn make_store() -> LogStore {
                 line: "healthcheck ok".into(),
                 ingest_seq: 0,
                 trace_id: None,
-
+                span_id: None,
                 attributes: SmallVec::new(),
             },
         ],
@@ -46,7 +46,7 @@ fn make_store() -> LogStore {
             line: "request received".into(),
             ingest_seq: 0,
             trace_id: None,
-
+            span_id: None,
             attributes: SmallVec::new(),
         }],
     );
@@ -122,7 +122,12 @@ fn test_limited_eval_keeps_newest_entries_globally() {
         LogQLResult::Streams(streams) => {
             let mut timestamps: Vec<i64> = streams
                 .iter()
-                .flat_map(|stream| stream.entries.iter().map(|(timestamp, _, _, _)| *timestamp))
+                .flat_map(|stream| {
+                    stream
+                        .entries
+                        .iter()
+                        .map(|(timestamp, _, _, _, _)| *timestamp)
+                })
                 .collect();
             timestamps.sort_unstable();
             assert_eq!(timestamps, vec![2_000_000_000, 3_000_000_000]);
@@ -165,7 +170,7 @@ fn test_json_pipeline_passes_non_json_lines_through() {
                 line: r#"{"level":"error","msg":"boom"}"#.into(),
                 ingest_seq: 0,
                 trace_id: None,
-
+                span_id: None,
                 attributes: SmallVec::new(),
             },
             LogEntry {
@@ -173,7 +178,7 @@ fn test_json_pipeline_passes_non_json_lines_through() {
                 line: "plain text not json".into(),
                 ingest_seq: 0,
                 trace_id: None,
-
+                span_id: None,
                 attributes: SmallVec::new(),
             },
         ],
@@ -204,8 +209,11 @@ fn test_stream_query_carries_trace_id_through_to_entries() {
                 timestamp_ns: 1_000_000_000,
                 line: "with trace".into(),
                 ingest_seq: 0,
-                trace_id: Some("0102030405060708090a0b0c0d0e0f10".into()),
-
+                trace_id: Some([
+                    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+                    0x0e, 0x0f, 0x10,
+                ]),
+                span_id: None,
                 attributes: SmallVec::new(),
             },
             LogEntry {
@@ -213,7 +221,7 @@ fn test_stream_query_carries_trace_id_through_to_entries() {
                 line: "without trace".into(),
                 ingest_seq: 0,
                 trace_id: None,
-
+                span_id: None,
                 attributes: SmallVec::new(),
             },
         ],
@@ -225,15 +233,20 @@ fn test_stream_query_carries_trace_id_through_to_entries() {
             assert_eq!(streams.len(), 1);
             let entries = &streams[0].entries;
             assert_eq!(entries.len(), 2);
-            let with_trace = entries.iter().find(|(_, line, _, _)| line == "with trace");
+            let with_trace = entries
+                .iter()
+                .find(|(_, line, _, _, _)| line == "with trace");
             assert_eq!(
-                with_trace.and_then(|(_, _, tid, _)| tid.as_deref()),
+                with_trace.and_then(|(_, _, tid, _, _)| tid.as_deref()),
                 Some("0102030405060708090a0b0c0d0e0f10")
             );
             let without_trace = entries
                 .iter()
-                .find(|(_, line, _, _)| line == "without trace");
-            assert_eq!(without_trace.and_then(|(_, _, tid, _)| tid.clone()), None);
+                .find(|(_, line, _, _, _)| line == "without trace");
+            assert_eq!(
+                without_trace.and_then(|(_, _, tid, _, _)| tid.clone()),
+                None
+            );
         }
         _ => panic!("expected Streams"),
     }
@@ -250,8 +263,11 @@ fn test_limited_stream_query_carries_trace_id_through_the_heap() {
             timestamp_ns: 1_000_000_000,
             line: "with trace".into(),
             ingest_seq: 0,
-            trace_id: Some("aabbccddeeff00112233445566778899".into()),
-
+            trace_id: Some([
+                0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+                0x88, 0x99,
+            ]),
+            span_id: None,
             attributes: SmallVec::new(),
         }],
     );

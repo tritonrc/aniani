@@ -182,6 +182,7 @@ fn ingest_loki_push(state: &SharedState, request: LokiPushRequest) -> (usize, us
                             .ingest_seq
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                         trace_id: None,
+                        span_id: None,
                         attributes: SmallVec::new(),
                     })
                 })
