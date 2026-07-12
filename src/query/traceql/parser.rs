@@ -88,6 +88,17 @@ pub enum SpanCondition {
     Kind { op: CompareOp, value: SpanKindValue },
     /// Span name comparison: `name op "value"`.
     Name { op: CompareOp, value: String },
+    /// Event name comparison: `event.name op "value"` — matches if any event
+    /// on the span has a name satisfying the operator.
+    EventName { op: CompareOp, value: String },
+    /// Event attribute comparison: `event.<key> op value` — matches if any
+    /// event on the span carries an attribute with the given key satisfying
+    /// the operator.
+    EventAttribute {
+        name: String,
+        op: CompareOp,
+        value: SpanValue,
+    },
 }
 
 /// Attribute scope.
@@ -277,6 +288,9 @@ fn parse_condition(input: &str) -> IResult<&str, SpanCondition> {
     if peek_keyword(input, "name") {
         return parse_name_condition(input);
     }
+    if input.starts_with("event.") {
+        return parse_event_condition(input);
+    }
     parse_attribute_condition(input)
 }
 
@@ -355,6 +369,33 @@ fn parse_name_condition(input: &str) -> IResult<&str, SpanCondition> {
     let (input, _) = multispace0(input)?;
     let (input, value) = parse_quoted_string(input)?;
     Ok((input, SpanCondition::Name { op, value }))
+}
+
+/// Parse an event-scoped condition: `event.name op "str"` or
+/// `event.<key> op value`. The `event.` prefix is consumed here; the
+/// remainder determines whether we match the event's name field or one of
+/// its attributes.
+fn parse_event_condition(input: &str) -> IResult<&str, SpanCondition> {
+    let (input, _) = tag("event.")(input)?;
+    let (input, key) =
+        take_while1(|c: char| c.is_alphanumeric() || c == '.' || c == '_' || c == '-')(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, op) = parse_compare_op(input)?;
+    let (input, _) = multispace0(input)?;
+    if key == "name" {
+        let (input, value) = parse_quoted_string(input)?;
+        Ok((input, SpanCondition::EventName { op, value }))
+    } else {
+        let (input, value) = parse_span_value(input)?;
+        Ok((
+            input,
+            SpanCondition::EventAttribute {
+                name: key.to_string(),
+                op,
+                value,
+            },
+        ))
+    }
 }
 
 fn parse_attribute_condition(input: &str) -> IResult<&str, SpanCondition> {

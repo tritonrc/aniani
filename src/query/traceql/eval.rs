@@ -358,6 +358,26 @@ fn span_matches_condition(
                 _ => false,
             }
         }
+        SpanCondition::EventName { op, value } => span
+            .events
+            .iter()
+            .any(|ev| compare_string(store.resolve(&ev.name), op, value, compiled_regex)),
+        SpanCondition::EventAttribute { name, op, value } => {
+            let mut found_key = false;
+            for ev in &span.events {
+                for (k, v) in &ev.attributes {
+                    if store.resolve(k) == name {
+                        found_key = true;
+                        if compare_attribute_value(v, op, value, compiled_regex, store) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            // Neq matches when no event carries the key at all, consistent
+            // with the absent-attribute semantics of span attribute Neq.
+            !found_key && matches!(op, CompareOp::Neq)
+        }
         SpanCondition::Attribute {
             scope,
             name,

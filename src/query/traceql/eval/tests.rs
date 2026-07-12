@@ -247,3 +247,58 @@ fn test_eval_by_kind() {
     assert_eq!(neq_results[0].matched_spans.len(), 1);
     assert_eq!(neq_results[0].matched_spans[0].name, "GET /");
 }
+
+#[test]
+fn test_eval_by_event_name_and_attribute() {
+    use crate::store::trace_store::SpanEvent;
+
+    let mut store = TraceStore::new();
+    let tid = [7u8; 16];
+    let svc = store.interner.get_or_intern("svc");
+    let op = store.interner.get_or_intern("handler");
+    let exc_name = store.interner.get_or_intern("exception");
+    let exc_type_key = store.interner.get_or_intern("exception.type");
+    let exc_type_val = store.interner.get_or_intern("ConnectionRefused");
+    store.ingest_spans(vec![Span {
+        trace_id: tid,
+        span_id: [1, 0, 0, 0, 0, 0, 0, 0],
+        parent_span_id: None,
+        name: op,
+        service_name: svc,
+        start_time_ns: 0,
+        duration_ns: 10,
+        status: SpanStatus::Error,
+        status_message: None,
+        attributes: SmallVec::new(),
+        events: vec![SpanEvent {
+            name: exc_name,
+            time_ns: 5,
+            attributes: SmallVec::from_vec(vec![(
+                exc_type_key,
+                AttributeValue::String(exc_type_val),
+            )]),
+        }],
+        links: Vec::new(),
+        kind: SpanKind::Internal,
+        ingest_seq: 0,
+    }]);
+
+    let name_expr =
+        crate::query::traceql::parser::parse_traceql(r#"{ event.name = "exception" }"#).unwrap();
+    let name_results = evaluate_traceql(&name_expr, &store);
+    assert_eq!(name_results.len(), 1);
+    assert_eq!(name_results[0].matched_spans.len(), 1);
+
+    let attr_expr = crate::query::traceql::parser::parse_traceql(
+        r#"{ event.exception.type = "ConnectionRefused" }"#,
+    )
+    .unwrap();
+    let attr_results = evaluate_traceql(&attr_expr, &store);
+    assert_eq!(attr_results.len(), 1);
+
+    // Neq on an absent event attribute should match (no event carries it).
+    let neq_expr =
+        crate::query::traceql::parser::parse_traceql(r#"{ event.missing.attr != "x" }"#).unwrap();
+    let neq_results = evaluate_traceql(&neq_expr, &store);
+    assert_eq!(neq_results.len(), 1);
+}

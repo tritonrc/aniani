@@ -320,3 +320,34 @@ fn test_kind_neq_still_parses() {
     let expr = parse_traceql("{ kind != client }").unwrap();
     assert!(matches!(expr, TraceQLExpr::SpanSelector { .. }));
 }
+
+#[test]
+fn test_event_name_selector() {
+    let expr = parse_traceql(r#"{ event.name = "exception" }"#).unwrap();
+    match expr {
+        TraceQLExpr::SpanSelector { conditions, .. } => match &conditions[0] {
+            SpanCondition::EventName { op, value } => {
+                assert_eq!(*op, CompareOp::Eq);
+                assert_eq!(value, "exception");
+            }
+            _ => panic!("expected EventName"),
+        },
+        _ => panic!("expected SpanSelector"),
+    }
+}
+
+#[test]
+fn test_event_attribute_selector() {
+    let expr = parse_traceql(r#"{ event.exception.type = "ConnectionError" }"#).unwrap();
+    match expr {
+        TraceQLExpr::SpanSelector { conditions, .. } => match &conditions[0] {
+            SpanCondition::EventAttribute { name, op, value } => {
+                assert_eq!(name, "exception.type");
+                assert_eq!(*op, CompareOp::Eq);
+                assert_eq!(*value, SpanValue::String("ConnectionError".into()));
+            }
+            _ => panic!("expected EventAttribute"),
+        },
+        _ => panic!("expected SpanSelector"),
+    }
+}
