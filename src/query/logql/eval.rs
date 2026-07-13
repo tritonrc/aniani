@@ -507,6 +507,15 @@ fn apply_stages_with_extract(
                 // No-op during filtering — the metric evaluator reads the
                 // field name and looks it up in the extracted map.
             }
+            PipelineStage::RegexpExtract(_, re) => {
+                if let Some(caps) = re.captures(line) {
+                    for name in re.capture_names().flatten() {
+                        if let Some(m) = caps.name(name) {
+                            extracted.insert(name.to_string(), m.as_str().to_string());
+                        }
+                    }
+                }
+            }
             PipelineStage::CompareFilter { key, op, value } => {
                 let label_val = match extracted.get(key.as_str()) {
                     Some(v) => v.as_str(),

@@ -123,13 +123,14 @@ pub enum MatchOp {
 #[derive(Debug, Clone)]
 #[allow(clippy::enum_variant_names)]
 pub enum PipelineStage {
-    LineContains(String),        // |= "text"
-    LineNotContains(String),     // != "text"
-    LineRegex(String, Regex),    // |~ "regex"
-    LineNotRegex(String, Regex), // !~ "regex"
-    JsonExtract,                 // | json
-    LogfmtExtract,               // | logfmt
-    Unwrap(String),              // | unwrap field
+    LineContains(String),         // |= "text"
+    LineNotContains(String),      // != "text"
+    LineRegex(String, Regex),     // |~ "regex"
+    LineNotRegex(String, Regex),  // !~ "regex"
+    JsonExtract,                  // | json
+    LogfmtExtract,                // | logfmt
+    Unwrap(String),               // | unwrap field
+    RegexpExtract(String, Regex), // | regexp "pattern" with named captures
     LabelFilter {
         // | key="value"
         key: String,
@@ -402,6 +403,19 @@ fn parse_json_or_label_filter(input: &str) -> IResult<&str, PipelineStage> {
         let (rest, field) = nom::bytes::take_while1(|c: char| c.is_alphanumeric() || c == '_')
             .parse_complete(rest)?;
         return Ok((rest, PipelineStage::Unwrap(field.to_string())));
+    }
+
+    // Try "regexp" keyword — named-capture field extraction
+    if let Ok((rest, _)) =
+        tag::<&str, &str, nom::error::Error<&str>>("regexp").parse_complete(input)
+        && is_keyword_boundary(rest)
+    {
+        let (rest, _) = multispace0().parse_complete(rest)?;
+        let (rest, pattern) = cut(parse_quoted_string).parse_complete(rest)?;
+        let re = Regex::new(&pattern).map_err(|_| {
+            nom::Err::Failure(nom::error::Error::new(rest, nom::error::ErrorKind::Verify))
+        })?;
+        return Ok((rest, PipelineStage::RegexpExtract(pattern, re)));
     }
 
     // Otherwise parse label filter: key op value
