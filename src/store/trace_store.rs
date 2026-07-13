@@ -65,8 +65,11 @@ pub enum AttributeValue {
     Int(i64),
     Float(f64),
     Bool(bool),
+    /// Nested array of attribute values (OTLP ArrayValue).
     Array(Vec<AttributeValue>),
+    /// Raw bytes, rendered as hex (OTLP BytesValue).
     Bytes(Vec<u8>),
+    /// Key-value list (OTLP KvlistValue).
     KeyValueList(Vec<(Spur, AttributeValue)>),
 }
 
@@ -260,32 +263,35 @@ impl TraceStore {
             AttributeValue::Int(i) => i.to_string(),
             AttributeValue::Float(f) => f.to_string(),
             AttributeValue::Bool(b) => b.to_string(),
-            AttributeValue::Array(items) => format!(
-                "[{}]",
-                items
+            AttributeValue::Array(items) => {
+                let parts: Vec<String> = items
                     .iter()
                     .map(|v| self.resolve_attribute_value(v))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            AttributeValue::Bytes(b) => format!(
-                "0x{}",
-                b.iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>()
-            ),
-            AttributeValue::KeyValueList(pairs) => format!(
-                "{{{}}}",
-                pairs
+                    .collect();
+                format!("[{}]", parts.join(", "))
+            }
+            AttributeValue::Bytes(b) => {
+                use std::fmt::Write;
+                let mut hex = String::with_capacity(b.len() * 2 + 2);
+                let _ = write!(hex, "0x");
+                for byte in b {
+                    let _ = write!(hex, "{byte:02x}");
+                }
+                hex
+            }
+            AttributeValue::KeyValueList(pairs) => {
+                let parts: Vec<String> = pairs
                     .iter()
-                    .map(|(k, v)| format!(
-                        "{}={}",
-                        self.interner.resolve(k),
-                        self.resolve_attribute_value(v)
-                    ))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
+                    .map(|(k, v)| {
+                        format!(
+                            "{}={}",
+                            self.interner.resolve(k),
+                            self.resolve_attribute_value(v)
+                        )
+                    })
+                    .collect();
+                format!("{{{}}}", parts.join(", "))
+            }
         }
     }
 

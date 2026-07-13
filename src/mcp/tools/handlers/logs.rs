@@ -64,10 +64,17 @@ pub(in crate::mcp::tools) fn handle_query_logs(
     };
     let mut out: Vec<Value> = Vec::new();
     for s in streams {
-        for (ts, line, _trace_id) in s.entries {
-            out.push(
-                json!({ "ts": (ts / 1_000_000).to_string(), "line": line, "labels": s.labels }),
-            );
+        for (ts, line, trace_id, span_id, attrs) in s.entries {
+            out.push(json!({
+                "ts": (ts / 1_000_000).to_string(),
+                "line": line,
+                "labels": s.labels,
+                "trace_id": trace_id,
+                "span_id": span_id,
+                "attributes": attrs.into_iter()
+                    .map(|(k, v)| (k, serde_json::Value::String(v)))
+                    .collect::<serde_json::Map<String, Value>>(),
+            }));
         }
     }
     let truncated = out.len() > limit;
@@ -101,6 +108,7 @@ mod tests {
     use crate::mcp::tools::call;
     use crate::store::empty_test_state as tests_state;
     use serde_json::json;
+    use smallvec::SmallVec;
 
     #[test]
     fn query_logs_structured_and_bad_logql() {
@@ -114,6 +122,10 @@ mod tests {
                     line: "hello".into(),
                     ingest_seq: 0,
                     trace_id: None,
+                    span_id: None,
+                    severity_number: 0,
+                    severity_text: None,
+                    attributes: SmallVec::new(),
                 }],
             );
         }
@@ -144,6 +156,10 @@ mod tests {
                     line: format!("line {i}"),
                     ingest_seq: 0,
                     trace_id: None,
+                    span_id: None,
+                    severity_number: 0,
+                    severity_text: None,
+                    attributes: SmallVec::new(),
                 })
                 .collect();
             logs.ingest_stream(vec![("service".into(), "api".into())], entries);
@@ -205,6 +221,10 @@ mod tests {
                 line: format!("line {i}"),
                 ingest_seq: 0,
                 trace_id: None,
+                span_id: None,
+                severity_number: 0,
+                severity_text: None,
+                attributes: SmallVec::new(),
             })
             .collect();
         logs.ingest_stream(vec![("service".into(), "api".into())], entries);

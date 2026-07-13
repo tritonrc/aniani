@@ -100,6 +100,46 @@ pub fn is_json_content_type(headers: &HeaderMap) -> bool {
         })
 }
 
+/// Parse a timestamp string into nanoseconds, classifying by magnitude.
+///
+/// Accepts integer nanoseconds, microseconds, milliseconds, or seconds
+/// (auto-detected by magnitude), and float seconds (e.g. "1700000000.5").
+/// Used by both ingest (Loki push) and query handlers so they agree on
+/// timestamp interpretation.
+pub fn parse_timestamp_ns(s: &str) -> Option<i64> {
+    let s = s.trim();
+    if let Ok(n) = s.parse::<i64>() {
+        return Some(classify_to_ns(n));
+    }
+    if let Ok(secs) = s.parse::<f64>() {
+        return float_seconds_to_ns(secs);
+    }
+    None
+}
+
+fn float_seconds_to_ns(secs: f64) -> Option<i64> {
+    const NS_PER_SEC: f64 = 1_000_000_000.0;
+    if !secs.is_finite()
+        || secs > i64::MAX as f64 / NS_PER_SEC
+        || secs < i64::MIN as f64 / NS_PER_SEC
+    {
+        return None;
+    }
+    Some((secs * NS_PER_SEC) as i64)
+}
+
+fn classify_to_ns(n: i64) -> i64 {
+    if n > 1_000_000_000_000_000_000 {
+        n // already nanoseconds
+    } else if n > 1_000_000_000_000_000 {
+        n.saturating_mul(1_000) // microseconds -> ns
+    } else if n > 1_000_000_000_000 {
+        n.saturating_mul(1_000_000) // milliseconds -> ns
+    } else {
+        n.saturating_mul(1_000_000_000) // seconds -> ns
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -282,7 +282,7 @@ fn build_dp_labels(
     let mut labels = resource_labels.to_vec();
     for attr in attrs {
         if let Some(val) = &attr.value
-            && let Some(s) = any_value_to_string(val)
+            && let Some(s) = super::label::any_value_to_string(val)
         {
             labels.push((attr.key.clone(), s));
         }
@@ -296,16 +296,5 @@ fn extract_number_value(dp: &opentelemetry_proto::tonic::metrics::v1::NumberData
         Some(Value::AsDouble(d)) => *d,
         Some(Value::AsInt(i)) => *i as f64,
         None => 0.0,
-    }
-}
-
-fn any_value_to_string(val: &opentelemetry_proto::tonic::common::v1::AnyValue) -> Option<String> {
-    use opentelemetry_proto::tonic::common::v1::any_value::Value;
-    match &val.value {
-        Some(Value::StringValue(s)) => Some(s.clone()),
-        Some(Value::IntValue(i)) => Some(i.to_string()),
-        Some(Value::DoubleValue(f)) => Some(f.to_string()),
-        Some(Value::BoolValue(b)) => Some(b.to_string()),
-        _ => None,
     }
 }

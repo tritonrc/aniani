@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 use crate::store::log_store::LogStore;
 use crate::store::{LabelMatchOp, LabelMatcher};
 
-use super::parser::{LogQLExpr, LogQLMatcher, MatchOp, MetricFunc, PipelineStage};
+use super::parser::{CompareOp, LogQLExpr, LogQLMatcher, MatchOp, MetricFunc, PipelineStage};
 
 /// Result of a LogQL evaluation.
 #[derive(Debug)]
@@ -20,13 +20,22 @@ pub enum LogQLResult {
     Matrix(Vec<MetricResult>),
 }
 
+/// A resolved log entry tuple: `(timestamp_ns, line, trace_id_hex, span_id_hex, attributes)`.
+/// `trace_id` / `span_id` are lowercase hex, `None` when absent. `attributes`
+/// are resolved per-entry structured attributes.
+pub type ResolvedEntry = (
+    i64,
+    String,
+    Option<String>,
+    Option<String>,
+    Vec<(String, String)>,
+);
+
 /// A single stream result with entries.
 #[derive(Debug)]
 pub struct StreamResult {
     pub labels: Vec<(String, String)>,
-    /// `(timestamp_ns, line, trace_id)`. `trace_id` is `Some` only for
-    /// OTLP-origin entries that carried a non-empty trace id.
-    pub entries: Vec<(i64, String, Option<String>)>,
+    pub entries: Vec<ResolvedEntry>,
 }
 
 /// A single metric result (from count_over_time, rate, etc.).
@@ -120,10 +129,30 @@ fn evaluate_metric_query(
             let mut numeric_min = f64::INFINITY;
             let mut numeric_max = f64::NEG_INFINITY;
 
-            for entry in entries.iter().filter(|e| apply_stages(&e.line, &stages)) {
+            // Find unwrap field if present.
+            let unwrap_field: Option<&str> = stages.iter().find_map(|s| {
+                if let PipelineStage::Unwrap(f) = s {
+                    Some(f.as_str())
+                } else {
+                    None
+                }
+            });
+
+            for entry in entries.iter() {
+                let Some(extracted) = apply_stages_with_extract(&entry.line, &stages, &labels)
+                else {
+                    continue;
+                };
                 count += 1;
                 byte_sum += entry.line.len();
-                if let Ok(value) = entry.line.trim().parse::<f64>() {
+                let numeric_val = if let Some(field) = unwrap_field {
+                    extracted
+                        .get(field)
+                        .and_then(|v| v.trim().parse::<f64>().ok())
+                } else {
+                    entry.line.trim().parse::<f64>().ok()
+                };
+                if let Some(value) = numeric_val {
                     numeric_count += 1;
                     numeric_sum += value;
                     numeric_min = numeric_min.min(value);
@@ -239,10 +268,38 @@ fn evaluate_unlimited_stream_query(
         if entries.is_empty() {
             continue;
         }
-        let entry_tuples: Vec<(i64, String, Option<String>)> = entries
+        let labels = store.get_stream_labels(sid).unwrap_or_default();
+        let entry_tuples: Vec<ResolvedEntry> = entries
             .iter()
-            .filter(|e| apply_stages(&e.line, stages))
-            .map(|e| (e.timestamp_ns, e.line.clone(), e.trace_id.clone()))
+            .filter(|e| apply_stages(&e.line, stages, &labels))
+            .map(|e| {
+                let mut attrs: Vec<(String, String)> = e
+                    .attributes
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            store.interner.resolve(k).to_string(),
+                            store.resolve_attribute_value(v),
+                        )
+                    })
+                    .collect();
+                if e.severity_number != 0 {
+                    attrs.push(("severity_number".to_string(), e.severity_number.to_string()));
+                }
+                if let Some(text) = e.severity_text {
+                    attrs.push((
+                        "severity_text".to_string(),
+                        store.interner.resolve(&text).to_string(),
+                    ));
+                }
+                (
+                    e.timestamp_ns,
+                    e.line.clone(),
+                    e.trace_id.as_ref().map(hex_bytes),
+                    e.span_id.as_ref().map(hex_bytes),
+                    attrs,
+                )
+            })
             .collect();
         if entry_tuples.is_empty() {
             continue;
@@ -268,15 +325,16 @@ fn evaluate_limited_stream_query(
     let mut sequence = 0usize;
 
     for &sid in stream_ids {
+        let labels = store.get_stream_labels(sid).unwrap_or_default();
         for entry in store.get_entries(sid, start_ns, end_ns) {
-            if !apply_stages(&entry.line, stages) {
+            if !apply_stages(&entry.line, stages, &labels) {
                 continue;
             }
 
             let should_insert = newest.len() < limit
                 || newest
                     .peek()
-                    .map(|Reverse((oldest_ts, _, _, _, _))| entry.timestamp_ns > *oldest_ts)
+                    .map(|Reverse((oldest_ts, _, _, _, _, _, _))| entry.timestamp_ns > *oldest_ts)
                     .unwrap_or(false);
             if !should_insert {
                 continue;
@@ -291,18 +349,47 @@ fn evaluate_limited_stream_query(
                 sequence,
                 sid,
                 entry.line.clone(),
-                entry.trace_id.clone(),
+                entry.trace_id,
+                entry.span_id,
+                {
+                    let mut attrs: Vec<(String, String)> = entry
+                        .attributes
+                        .iter()
+                        .map(|(k, v)| {
+                            (
+                                store.interner.resolve(k).to_string(),
+                                store.resolve_attribute_value(v),
+                            )
+                        })
+                        .collect();
+                    if entry.severity_number != 0 {
+                        attrs.push((
+                            "severity_number".to_string(),
+                            entry.severity_number.to_string(),
+                        ));
+                    }
+                    if let Some(text) = entry.severity_text {
+                        attrs.push((
+                            "severity_text".to_string(),
+                            store.interner.resolve(&text).to_string(),
+                        ));
+                    }
+                    attrs
+                },
             )));
             sequence = sequence.wrapping_add(1);
         }
     }
 
-    let mut grouped: FxHashMap<u64, Vec<(i64, String, Option<String>)>> = FxHashMap::default();
-    for Reverse((timestamp_ns, _, sid, line, trace_id)) in newest {
-        grouped
-            .entry(sid)
-            .or_default()
-            .push((timestamp_ns, line, trace_id));
+    let mut grouped: FxHashMap<u64, Vec<ResolvedEntry>> = FxHashMap::default();
+    for Reverse((timestamp_ns, _, sid, line, trace_id, span_id, attrs)) in newest {
+        grouped.entry(sid).or_default().push((
+            timestamp_ns,
+            line,
+            trace_id.as_ref().map(hex_bytes),
+            span_id.as_ref().map(hex_bytes),
+            attrs,
+        ));
     }
 
     let mut result_stream_ids: Vec<u64> = grouped.keys().copied().collect();
@@ -313,7 +400,7 @@ fn evaluate_limited_stream_query(
         let Some(mut entries) = grouped.remove(&sid) else {
             continue;
         };
-        entries.sort_by_key(|(timestamp_ns, _, _)| *timestamp_ns);
+        entries.sort_by_key(|(timestamp_ns, _, _, _, _)| *timestamp_ns);
         let labels = store.get_stream_labels(sid).unwrap_or_default();
         results.push(StreamResult { labels, entries });
     }
@@ -343,28 +430,45 @@ fn extract_selector_and_stages(
     }
 }
 
-fn apply_stages(line: &str, stages: &[PipelineStage]) -> bool {
+fn apply_stages(line: &str, stages: &[PipelineStage], stream_labels: &[(String, String)]) -> bool {
+    apply_stages_with_extract(line, stages, stream_labels).is_some()
+}
+
+/// Run pipeline stages, returning the extracted label map on success or
+/// `None` if a stage filters the entry out. Used by the metric evaluator to
+/// access `| unwrap` fields.
+fn apply_stages_with_extract(
+    line: &str,
+    stages: &[PipelineStage],
+    stream_labels: &[(String, String)],
+) -> Option<FxHashMap<String, String>> {
     let mut extracted: FxHashMap<String, String> = FxHashMap::default();
+    // Seed with the stream's own labels so that LabelFilter stages can match
+    // them even without a preceding | json / | logfmt extraction. This mirrors
+    // real Loki where stream labels are visible to pipeline label filters.
+    for (k, v) in stream_labels {
+        extracted.insert(k.clone(), v.clone());
+    }
     for stage in stages {
         match stage {
             PipelineStage::LineContains(pattern) => {
                 if !line.contains(pattern.as_str()) {
-                    return false;
+                    return None;
                 }
             }
             PipelineStage::LineNotContains(pattern) => {
                 if line.contains(pattern.as_str()) {
-                    return false;
+                    return None;
                 }
             }
             PipelineStage::LineRegex(_, re) => {
                 if !re.is_match(line) {
-                    return false;
+                    return None;
                 }
             }
             PipelineStage::LineNotRegex(_, re) => {
                 if re.is_match(line) {
-                    return false;
+                    return None;
                 }
             }
             PipelineStage::LogfmtExtract => {
@@ -399,6 +503,38 @@ fn apply_stages(line: &str, stages: &[PipelineStage]) -> bool {
                     }
                 }
             }
+            PipelineStage::Unwrap(_) => {
+                // No-op during filtering — the metric evaluator reads the
+                // field name and looks it up in the extracted map.
+            }
+            PipelineStage::RegexpExtract(_, re) => {
+                if let Some(caps) = re.captures(line) {
+                    for name in re.capture_names().flatten() {
+                        if let Some(m) = caps.name(name) {
+                            extracted.insert(name.to_string(), m.as_str().to_string());
+                        }
+                    }
+                }
+            }
+            PipelineStage::CompareFilter { key, op, value } => {
+                let label_val = match extracted.get(key.as_str()) {
+                    Some(v) => v.as_str(),
+                    None => return None,
+                };
+                let num: f64 = match label_val.trim().parse() {
+                    Ok(n) => n,
+                    Err(_) => return None,
+                };
+                let passes = match op {
+                    CompareOp::Gt => num > *value,
+                    CompareOp::Gte => num >= *value,
+                    CompareOp::Lt => num < *value,
+                    CompareOp::Lte => num <= *value,
+                };
+                if !passes {
+                    return None;
+                }
+            }
             PipelineStage::LabelFilter {
                 key,
                 op,
@@ -407,7 +543,7 @@ fn apply_stages(line: &str, stages: &[PipelineStage]) -> bool {
             } => {
                 let label_val = match extracted.get(key.as_str()) {
                     Some(v) => v.as_str(),
-                    None => return false, // label not found => filter fails
+                    None => return None, // label not found => filter fails
                 };
                 let matches = match op {
                     MatchOp::Eq => label_val == value,
@@ -422,12 +558,12 @@ fn apply_stages(line: &str, stages: &[PipelineStage]) -> bool {
                         .unwrap_or(false),
                 };
                 if !matches {
-                    return false;
+                    return None;
                 }
             }
         }
     }
-    true
+    Some(extracted)
 }
 
 fn convert_matchers(matchers: &[super::parser::LogQLMatcher]) -> Vec<LabelMatcher> {
@@ -444,6 +580,15 @@ fn convert_matchers(matchers: &[super::parser::LogQLMatcher]) -> Vec<LabelMatche
             value: m.value.clone(),
         })
         .collect()
+}
+
+fn hex_bytes<const N: usize>(b: &[u8; N]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(N * 2);
+    for byte in b {
+        let _ = write!(s, "{byte:02x}");
+    }
+    s
 }
 
 #[cfg(test)]

@@ -264,6 +264,7 @@ mod tests {
     use super::*;
     use crate::store::empty_test_state as state;
     use crate::store::log_store::LogEntry;
+    use smallvec::SmallVec;
 
     #[test]
     fn summarize_counts_errors_and_respects_since() {
@@ -281,12 +282,20 @@ mod tests {
                         line: "boom1".into(),
                         ingest_seq: 0,
                         trace_id: None,
+                        span_id: None,
+                        severity_number: 0,
+                        severity_text: None,
+                        attributes: SmallVec::new(),
                     },
                     LogEntry {
                         timestamp_ns: 20,
                         line: "boom2".into(),
                         ingest_seq: 5,
                         trace_id: None,
+                        span_id: None,
+                        severity_number: 0,
+                        severity_text: None,
+                        attributes: SmallVec::new(),
                     },
                 ],
             );
@@ -339,6 +348,10 @@ mod tests {
                     line: "ok".into(),
                     ingest_seq: 0,
                     trace_id: None,
+                    span_id: None,
+                    severity_number: 0,
+                    severity_text: None,
+                    attributes: SmallVec::new(),
                 }],
             );
             logs.ingest_stream(
@@ -351,6 +364,10 @@ mod tests {
                     line: "bad".into(),
                     ingest_seq: 1,
                     trace_id: None,
+                    span_id: None,
+                    severity_number: 0,
+                    severity_text: None,
+                    attributes: SmallVec::new(),
                 }],
             );
         }
