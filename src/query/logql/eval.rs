@@ -517,10 +517,7 @@ fn apply_stages_with_extract(
                 }
             }
             PipelineStage::CompareFilter { key, op, value } => {
-                let label_val = match extracted.get(key.as_str()) {
-                    Some(v) => v.as_str(),
-                    None => return None,
-                };
+                let label_val = extracted.get(key.as_str())?.as_str();
                 let num: f64 = match label_val.trim().parse() {
                     Ok(n) => n,
                     Err(_) => return None,
@@ -541,10 +538,8 @@ fn apply_stages_with_extract(
                 value,
                 compiled_regex,
             } => {
-                let label_val = match extracted.get(key.as_str()) {
-                    Some(v) => v.as_str(),
-                    None => return None, // label not found => filter fails
-                };
+                let label_val = extracted.get(key.as_str())?; // label not found => filter fails
+                let label_val = label_val.as_str();
                 let matches = match op {
                     MatchOp::Eq => label_val == value,
                     MatchOp::Neq => label_val != value,
