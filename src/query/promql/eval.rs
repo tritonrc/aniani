@@ -62,10 +62,9 @@ fn eval_expr(
             aggregation::eval_aggregation(agg, inner, param)
         }
         Expr::Binary(bin) => {
-            binary::reject_unsupported_modifiers(bin)?;
             let lhs = eval_expr(&bin.lhs, store, start_ms, end_ms, step_ms, instant)?;
             let rhs = eval_expr(&bin.rhs, store, start_ms, end_ms, step_ms, instant)?;
-            binary::eval_binary_result(&bin.op.to_string(), lhs, rhs)
+            binary::eval_binary_result(bin, lhs, rhs)
         }
         Expr::Paren(ParenExpr { expr, .. }) => {
             eval_expr(expr, store, start_ms, end_ms, step_ms, instant)
@@ -116,6 +115,55 @@ fn eval_call(
             };
             selectors::eval_rate_like(func_name, arg, store, start_ms, end_ms, step_ms, instant)
         }
+        "avg_over_time" | "min_over_time" | "max_over_time" | "sum_over_time"
+        | "count_over_time" | "last_over_time" | "present_over_time" | "stddev_over_time"
+        | "stdvar_over_time" => {
+            let Some(arg) = call.args.args.first() else {
+                return Err(PromQLError::Eval(format!(
+                    "{func_name} requires a range vector argument",
+                )));
+            };
+            selectors::eval_over_time(func_name, arg, store, start_ms, end_ms, step_ms, instant)
+        }
+        "quantile_over_time" => {
+            if call.args.args.len() < 2 {
+                return Err(PromQLError::Eval(
+                    "quantile_over_time requires 2 arguments".into(),
+                ));
+            }
+            let quantile = match eval_expr(
+                &call.args.args[0],
+                store,
+                start_ms,
+                end_ms,
+                step_ms,
+                instant,
+            )? {
+                PromQLResult::Scalar(v) => v,
+                _ => {
+                    return Err(PromQLError::Eval(
+                        "first arg to quantile_over_time must be scalar".into(),
+                    ));
+                }
+            };
+            selectors::eval_quantile_over_time(
+                quantile,
+                &call.args.args[1],
+                store,
+                start_ms,
+                end_ms,
+                step_ms,
+                instant,
+            )
+        }
+        "absent_over_time" => {
+            let Some(arg) = call.args.args.first() else {
+                return Err(PromQLError::Eval(
+                    "absent_over_time requires a range vector argument".into(),
+                ));
+            };
+            selectors::eval_absent_over_time(arg, store, start_ms, end_ms, step_ms, instant)
+        }
         "histogram_quantile" => {
             if call.args.args.len() < 2 {
                 return Err(PromQLError::Eval(
@@ -150,6 +198,24 @@ fn eval_call(
         "abs" | "ceil" | "floor" | "round" => {
             let inner = eval_one_arg(call, store, start_ms, end_ms, step_ms, instant, func_name)?;
             functions::apply_scalar_func(func_name, inner)
+        }
+        "ln" | "log2" | "log10" | "exp" | "sqrt" | "sgn" => {
+            let inner = eval_one_arg(call, store, start_ms, end_ms, step_ms, instant, func_name)?;
+            functions::apply_math_func(func_name, inner)
+        }
+        "timestamp" => {
+            let inner = eval_one_arg(call, store, start_ms, end_ms, step_ms, instant, func_name)?;
+            functions::apply_timestamp(inner, end_ms)
+        }
+        "changes" | "resets" => {
+            let Some(arg) = call.args.args.first() else {
+                return Err(PromQLError::Eval(format!(
+                    "{func_name} requires a range vector argument",
+                )));
+            };
+            selectors::eval_changes_or_resets(
+                func_name, arg, store, start_ms, end_ms, step_ms, instant,
+            )
         }
         "label_replace" => {
             let inner = eval_one_arg(call, store, start_ms, end_ms, step_ms, instant, func_name)?;

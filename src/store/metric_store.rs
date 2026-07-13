@@ -40,6 +40,49 @@ pub enum MetricStoreError {
     },
 }
 
+/// The type of a metric, determining how it should be queried.
+///
+/// `Counter` values are monotonically increasing and should be used with
+/// `rate()` / `increase()`. `Gauge` values can go up and down and are read
+/// directly. `Histogram` and `Summary` are stored as multiple series with
+/// `le` / `quantile` labels respectively.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MetricType {
+    Counter,
+    Gauge,
+    Histogram,
+    Summary,
+    /// Type not known (e.g. Prometheus remote write, which doesn't carry types).
+    Unknown,
+}
+
+impl MetricType {
+    /// Lowercase Prometheus-compatible string: `"counter"`, `"gauge"`, etc.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Counter => "counter",
+            Self::Gauge => "gauge",
+            Self::Histogram => "histogram",
+            Self::Summary => "summary",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Metadata for a single metric name: type, help text, and unit.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MetricMetadata {
+    /// Whether this is a counter, gauge, histogram, etc.
+    #[serde(default)]
+    pub metric_type: Option<MetricType>,
+    /// Human-readable description from OTLP `description` field.
+    #[serde(default)]
+    pub help: Option<String>,
+    /// Unit from OTLP `unit` field (e.g. `"ms"`, `"bytes"`).
+    #[serde(default)]
+    pub unit: Option<String>,
+}
+
 /// In-memory metric storage with inverted index.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricStore {
@@ -62,6 +105,9 @@ pub struct MetricStore {
     /// Normalized metric name -> original source metric name.
     #[serde(default)]
     pub normalized_name_sources: FxHashMap<Spur, Spur>,
+    /// Normalized metric name -> type/help/unit metadata.
+    #[serde(default)]
+    pub metric_metadata: FxHashMap<Spur, MetricMetadata>,
 }
 
 impl MetricStore {
@@ -76,6 +122,7 @@ impl MetricStore {
             series_ids: FxHashMap::default(),
             next_series_id: 0,
             normalized_name_sources: FxHashMap::default(),
+            metric_metadata: FxHashMap::default(),
         }
     }
 
@@ -140,6 +187,46 @@ impl MetricStore {
                 Ok(())
             }
         }
+    }
+
+    /// Register type/help/unit metadata for a metric name.
+    ///
+    /// Overwrites existing metadata only for fields that are `Some`. This lets
+    /// multiple data points in the same OTLP batch supply metadata without
+    /// clobbering each other, while also allowing a later ingest to fill in
+    /// fields that were `None` in the first sighting.
+    pub fn register_metric_metadata(
+        &mut self,
+        normalized_name: &str,
+        metric_type: Option<MetricType>,
+        help: Option<&str>,
+        unit: Option<&str>,
+    ) {
+        let spur = self.interner.get_or_intern(normalized_name);
+        let entry = self.metric_metadata.entry(spur).or_default();
+        if metric_type.is_some() {
+            entry.metric_type = metric_type;
+        }
+        if help.is_some() {
+            entry.help = help.map(String::from);
+        }
+        if unit.is_some() {
+            entry.unit = unit.map(String::from);
+        }
+    }
+
+    /// Resolve the [`MetricType`] for a resolved metric-name spur, if known.
+    pub fn get_metric_type(&self, name_spur: &Spur) -> Option<MetricType> {
+        self.metric_metadata
+            .get(name_spur)
+            .and_then(|m| m.metric_type)
+    }
+
+    /// Resolve metadata for a metric name string.
+    pub fn get_metric_metadata(&self, name: &str) -> Option<&MetricMetadata> {
+        self.interner
+            .get(name)
+            .and_then(|s| self.metric_metadata.get(&s))
     }
 
     /// Ingest samples for a metric with given name and labels.
@@ -345,6 +432,7 @@ impl MetricStore {
         self.series_ids.clear();
         self.next_series_id = 0;
         self.normalized_name_sources.clear();
+        self.metric_metadata.clear();
     }
 
     /// Clear all data belonging to a specific service.
@@ -393,6 +481,8 @@ impl MetricStore {
                 .collect();
             self.normalized_name_sources
                 .retain(|normalized, _| surviving.contains(normalized));
+            self.metric_metadata
+                .retain(|normalized, _| surviving.contains(normalized));
         }
     }
 }
@@ -436,6 +526,7 @@ impl MetricStore {
         bytes += self.series_ids.len()
             * (std::mem::size_of::<LabelPairs>() + std::mem::size_of::<u64>() + 8);
         bytes += self.normalized_name_sources.len() * (std::mem::size_of::<Spur>() * 2 + 8);
+        bytes += self.metric_metadata.len() * (std::mem::size_of::<Spur>() + 64);
 
         bytes
     }

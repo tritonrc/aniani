@@ -9,7 +9,27 @@ use axum::response::IntoResponse;
 use prost::Message;
 
 use crate::store::SharedState;
-use crate::store::metric_store::Sample;
+use crate::store::metric_store::{MetricType, Sample};
+
+/// Infer the metric type from a Prometheus metric name using conventional suffixes.
+///
+/// Prometheus doesn't carry type information in remote write. We use the standard
+/// naming conventions: `_bucket` / `_sum` / `_count` → histogram, `_total` / ends
+/// with `_count` (non-histogram) → counter. Everything else is treated as a gauge.
+fn infer_metric_type(name: &str) -> MetricType {
+    if name.ends_with("_bucket") {
+        MetricType::Histogram
+    } else if name.ends_with("_sum") || name.ends_with("_count") {
+        // These are histogram components — the parent histogram is inferred
+        // from _bucket above, but _sum/_count without a _bucket sibling will
+        // also be classified as histogram, which is the best heuristic.
+        MetricType::Histogram
+    } else if name.ends_with("_total") {
+        MetricType::Counter
+    } else {
+        MetricType::Unknown
+    }
+}
 
 /// Prometheus remote write `Sample`.
 #[derive(Clone, PartialEq, Message)]
@@ -132,6 +152,16 @@ pub async fn remote_write_handler(
         prepared.push((metric_name, labels, samples));
     }
 
+    // Collect unique metric names for type inference (before prepared is consumed).
+    let metric_names: Vec<String> = {
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        prepared
+            .iter()
+            .filter(|(name, _, _)| seen.insert(name.as_str()))
+            .map(|(name, _, _)| name.clone())
+            .collect()
+    };
+
     // Acquire write lock and ingest
     let mut store = state.metric_store.write();
     for (name, _, _) in &prepared {
@@ -148,6 +178,9 @@ pub async fn remote_write_handler(
     }
     for (name, labels, samples) in prepared {
         store.ingest_samples(&name, labels, samples);
+    }
+    for name in &metric_names {
+        store.register_metric_metadata(name, Some(infer_metric_type(name)), None, None);
     }
 
     StatusCode::NO_CONTENT

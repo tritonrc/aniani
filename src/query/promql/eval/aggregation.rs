@@ -55,7 +55,24 @@ pub(super) fn eval_aggregation(
             sorted_series.truncate(k);
             return Ok(PromQLResult::InstantVector(sorted_series));
         }
-        "sum" | "avg" | "max" | "min" | "count" => {}
+        "count_values" => {
+            return Err(PromQLError::Unsupported("count_values aggregation".into()));
+        }
+        "quantile" => {
+            let q = match param {
+                Some(PromQLResult::Scalar(v)) => v,
+                Some(_) => {
+                    return Err(PromQLError::Eval(
+                        "quantile parameter must be a scalar".into(),
+                    ));
+                }
+                None => {
+                    return Err(PromQLError::Eval("quantile requires a parameter φ".into()));
+                }
+            };
+            return Ok(eval_quantile_aggregation(q, series, &agg.modifier));
+        }
+        "sum" | "avg" | "max" | "min" | "count" | "stddev" | "stdvar" | "group" => {}
         other => {
             return Err(PromQLError::Unsupported(format!("aggregation: {}", other)));
         }
@@ -142,12 +159,86 @@ fn aggregate_group(op: &str, series: &[SeriesResult]) -> Vec<(i64, f64)> {
             let result = match op {
                 "sum" => values.iter().sum(),
                 "avg" => values.iter().sum::<f64>() / values.len() as f64,
-                "max" => values.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
-                "min" => values.iter().cloned().fold(f64::INFINITY, f64::min),
+                "max" => values.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                "min" => values.iter().copied().fold(f64::INFINITY, f64::min),
                 "count" => values.len() as f64,
+                "group" => 1.0,
+                "stddev" => {
+                    let mean = values.iter().sum::<f64>() / values.len() as f64;
+                    let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
+                        / values.len() as f64;
+                    variance.sqrt()
+                }
+                "stdvar" => {
+                    let mean = values.iter().sum::<f64>() / values.len() as f64;
+                    values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64
+                }
                 _ => unreachable!("unsupported aggregations filtered before reaching here"),
             };
             Some((t, result))
+        })
+        .collect()
+}
+
+/// Compute `quantile(φ, ...)` aggregation across series at each timestamp.
+///
+/// Groups series by the modifier (same as other aggregations), then for each
+/// group and timestamp, computes the φ-quantile of the cross-series values
+/// using nearest-rank interpolation.
+fn eval_quantile_aggregation(
+    q: f64,
+    series: Vec<SeriesResult>,
+    modifier: &Option<LabelModifier>,
+) -> PromQLResult {
+    let mut groups: BTreeMap<Vec<(String, String)>, Vec<SeriesResult>> = BTreeMap::new();
+    for sr in series {
+        let group_labels = compute_group_labels(&sr.labels, modifier);
+        groups.entry(group_labels).or_default().push(sr);
+    }
+
+    let mut results = Vec::new();
+    for (group_labels, group_series) in groups {
+        let samples = quantile_group(&group_series, q);
+        if !samples.is_empty() {
+            results.push(SeriesResult {
+                labels: group_labels,
+                samples,
+            });
+        }
+    }
+
+    PromQLResult::InstantVector(results)
+}
+
+fn quantile_group(series: &[SeriesResult], q: f64) -> Vec<(i64, f64)> {
+    if series.is_empty() || !(0.0..=1.0).contains(&q) {
+        return Vec::new();
+    }
+
+    let mut timestamps: Vec<i64> = series
+        .iter()
+        .flat_map(|s| s.samples.iter().map(|(t, _)| *t))
+        .collect();
+    timestamps.sort_unstable();
+    timestamps.dedup();
+
+    let lookups: Vec<FxHashMap<i64, f64>> = series
+        .iter()
+        .map(|s| s.samples.iter().copied().collect())
+        .collect();
+
+    timestamps
+        .iter()
+        .filter_map(|&t| {
+            let mut values: Vec<f64> = lookups.iter().filter_map(|m| m.get(&t).copied()).collect();
+            if values.is_empty() {
+                return None;
+            }
+            values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            // Nearest-rank method: rank = ceil(q * n), clamped to [1, n]
+            let n = values.len();
+            let rank = ((q * n as f64).ceil() as usize).clamp(1, n);
+            Some((t, values[rank - 1]))
         })
         .collect()
 }

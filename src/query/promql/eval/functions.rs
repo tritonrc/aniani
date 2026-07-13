@@ -154,6 +154,70 @@ pub(super) fn apply_scalar_func(
     }
 }
 
+/// Apply a math function (ln, log2, log10, exp, sqrt, sgn) to each sample value.
+pub(super) fn apply_math_func(
+    func_name: &str,
+    result: PromQLResult,
+) -> Result<PromQLResult, PromQLError> {
+    let map_value = |v: f64| -> f64 {
+        match func_name {
+            "ln" => v.ln(),
+            "log2" => v.log2(),
+            "log10" => v.log10(),
+            "exp" => v.exp(),
+            "sqrt" => v.sqrt(),
+            "sgn" => {
+                if v > 0.0 {
+                    1.0
+                } else if v < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                }
+            }
+            _ => v,
+        }
+    };
+    match result {
+        PromQLResult::InstantVector(series) => {
+            let mapped: Vec<SeriesResult> = series
+                .into_iter()
+                .map(|mut sr| {
+                    for sample in &mut sr.samples {
+                        sample.1 = map_value(sample.1);
+                    }
+                    sr
+                })
+                .collect();
+            Ok(PromQLResult::InstantVector(mapped))
+        }
+        PromQLResult::Scalar(v) => Ok(PromQLResult::Scalar(map_value(v))),
+        other => Ok(other),
+    }
+}
+
+/// `timestamp()` — returns the Unix timestamp of each sample in seconds.
+pub(super) fn apply_timestamp(
+    result: PromQLResult,
+    _end_ms: i64,
+) -> Result<PromQLResult, PromQLError> {
+    match result {
+        PromQLResult::InstantVector(series) => {
+            let mapped: Vec<SeriesResult> = series
+                .into_iter()
+                .map(|mut sr| {
+                    for sample in &mut sr.samples {
+                        sample.1 = sample.0 as f64 / 1000.0;
+                    }
+                    sr
+                })
+                .collect();
+            Ok(PromQLResult::InstantVector(mapped))
+        }
+        other => Ok(other),
+    }
+}
+
 /// Clamp each sample value in a vector by optional min/max bounds.
 pub(super) fn apply_clamp(
     result: PromQLResult,
