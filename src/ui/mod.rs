@@ -1,7 +1,8 @@
 //! Optional embedded web UI served under `/ui`.
 //!
 //! Gated behind the `ui` Cargo feature (on by default). Assets are embedded at
-//! compile time via `rust-embed`; Vue itself loads from a CDN at runtime.
+//! compile time via `rust-embed`, including a vendored copy of Vue under
+//! `vendor/` so the UI works fully offline with no CDN dependency.
 
 use axum::Router;
 use axum::body::Body;
@@ -45,9 +46,12 @@ async fn index() -> Response {
     serve("index.html")
 }
 
-/// GET /ui/assets/{file} — embedded static asset.
+/// GET /ui/assets/{*file} — embedded static asset. Subdirectory paths are
+/// allowed (e.g. `vendor/vue.esm-browser.prod.js`); only `..` traversal is
+/// rejected. rust-embed serves only compile-time-embedded files, so there is
+/// no filesystem read to escape.
 async fn asset(Path(file): Path<String>) -> Response {
-    if file.contains('/') || file.contains("..") {
+    if file.contains("..") {
         return (StatusCode::BAD_REQUEST, "invalid asset path").into_response();
     }
     serve(&file)
@@ -58,7 +62,7 @@ pub fn routes() -> Router<SharedState> {
     Router::new()
         .route("/ui", get(index))
         .route("/ui/", get(index))
-        .route("/ui/assets/{file}", get(asset))
+        .route("/ui/assets/{*file}", get(asset))
 }
 
 #[cfg(all(test, feature = "ui"))]
@@ -142,5 +146,13 @@ mod tests {
             resp.status(),
             StatusCode::BAD_REQUEST | StatusCode::NOT_FOUND
         ));
+    }
+
+    #[tokio::test]
+    async fn test_vendored_vue_served_from_subdir() {
+        let resp = get_resp("/ui/assets/vendor/vue.esm-browser.prod.js").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp.headers().get(header::CONTENT_TYPE).unwrap();
+        assert!(ct.to_str().unwrap().starts_with("text/javascript"));
     }
 }

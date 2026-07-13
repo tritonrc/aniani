@@ -95,12 +95,23 @@ fn summarize_logs(
 
     let mut logs: Vec<(i64, serde_json::Value)> = Vec::new();
     for stream_id in store.query_streams(&matchers) {
+        let labels = store.get_stream_labels(stream_id).unwrap_or_default();
         for entry in store.get_entries(stream_id, start_ns, end_ns) {
+            let trace_id = entry.trace_id.as_ref().map(|b| {
+                use std::fmt::Write;
+                let mut s = String::with_capacity(32);
+                for byte in b {
+                    let _ = write!(s, "{byte:02x}");
+                }
+                s
+            });
             logs.push((
                 entry.timestamp_ns,
                 json!({
                     "timestamp": entry.timestamp_ns.to_string(),
                     "line": entry.line,
+                    "labels": labels,
+                    "trace_id": trace_id,
                 }),
             ));
         }
@@ -142,12 +153,20 @@ fn summarize_metrics(state: &SharedState, service: &str) -> Vec<serde_json::Valu
         };
         let metric_name = store.interner.resolve(name_value).to_string();
         let lower_name = metric_name.to_ascii_lowercase();
-        if !lower_name.contains("error") && !lower_name.contains("fail") {
+        let is_notable = lower_name.contains("error")
+            || lower_name.contains("fail")
+            || lower_name.contains("duration")
+            || lower_name.contains("latency");
+        if !is_notable {
             continue;
         }
         let Some(sample) = series.samples.last() else {
             continue;
         };
+
+        let metric_type = store
+            .get_metric_type(name_value)
+            .map(|t| t.as_str().to_string());
 
         let labels = series
             .labels
@@ -163,6 +182,7 @@ fn summarize_metrics(state: &SharedState, service: &str) -> Vec<serde_json::Valu
 
         metrics.push(json!({
             "name": metric_name,
+            "type": metric_type,
             "timestampMs": sample.timestamp_ms.to_string(),
             "value": sample.value,
             "labels": labels,

@@ -128,17 +128,27 @@ export const SERVICE_COLORS = [
 ]
 
 export const vocab = reactive({
-  services: [],     // [{ name, signals: [] }]
-  metricNames: [],  // ["http_request_duration_ms", ...]
-  catalog: {},      // { [service]: { metrics: [], log_labels: [] } }
+  services: [],       // [{ name, signals: [] }]
+  metricNames: [],    // ["http_request_duration_ms", ...]
+  metricMeta: {},     // { "http_requests_total": { type: "counter", help: "...", unit: "..." } }
+  catalog: {},        // { [service]: { metrics: [], log_labels: [] } }
 })
 export async function loadVocab() {
-  const [s, m] = await Promise.allSettled([
+  const [s, m, md] = await Promise.allSettled([
     apiGet('/api/v1/services'),
     apiGet('/api/v1/label/__name__/values'),
+    apiGet('/api/v1/metadata'),
   ])
   if (s.status === 'fulfilled') vocab.services = (s.value.data && s.value.data.services) || []
   if (m.status === 'fulfilled') vocab.metricNames = m.value.data || []
+  if (md.status === 'fulfilled' && md.value.data) {
+    const meta = md.value.data
+    for (const [name, entries] of Object.entries(meta)) {
+      if (Array.isArray(entries) && entries[0]) {
+        vocab.metricMeta[name] = entries[0]
+      }
+    }
+  }
 }
 export async function loadCatalog(service) {
   if (!service) return null

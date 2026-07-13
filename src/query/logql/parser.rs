@@ -123,12 +123,14 @@ pub enum MatchOp {
 #[derive(Debug, Clone)]
 #[allow(clippy::enum_variant_names)]
 pub enum PipelineStage {
-    LineContains(String),        // |= "text"
-    LineNotContains(String),     // != "text"
-    LineRegex(String, Regex),    // |~ "regex"
-    LineNotRegex(String, Regex), // !~ "regex"
-    JsonExtract,                 // | json
-    LogfmtExtract,               // | logfmt
+    LineContains(String),         // |= "text"
+    LineNotContains(String),      // != "text"
+    LineRegex(String, Regex),     // |~ "regex"
+    LineNotRegex(String, Regex),  // !~ "regex"
+    JsonExtract,                  // | json
+    LogfmtExtract,                // | logfmt
+    Unwrap(String),               // | unwrap field
+    RegexpExtract(String, Regex), // | regexp "pattern" with named captures
     LabelFilter {
         // | key="value"
         key: String,
@@ -137,6 +139,21 @@ pub enum PipelineStage {
         /// Pre-compiled regex for Regex/NotRegex match ops, None for Eq/Neq.
         compiled_regex: Option<Regex>,
     },
+    /// Numeric comparison on an extracted field: `| field >= 500`.
+    CompareFilter {
+        key: String,
+        op: CompareOp,
+        value: f64,
+    },
+}
+
+/// Comparison operators for numeric label filters.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CompareOp {
+    Gt,  // >
+    Gte, // >=
+    Lt,  // <
+    Lte, // <=
 }
 
 /// Metric functions over log streams.
@@ -377,10 +394,64 @@ fn parse_json_or_label_filter(input: &str) -> IResult<&str, PipelineStage> {
         return Ok((rest, PipelineStage::LogfmtExtract));
     }
 
-    // Otherwise parse label filter: key op "value"
+    // Try "unwrap <field>" — extracts a numeric field for metric queries
+    if let Ok((rest, _)) =
+        tag::<&str, &str, nom::error::Error<&str>>("unwrap").parse_complete(input)
+        && is_keyword_boundary(rest)
+    {
+        let (rest, _) = multispace0().parse_complete(rest)?;
+        let (rest, field) = nom::bytes::take_while1(|c: char| c.is_alphanumeric() || c == '_')
+            .parse_complete(rest)?;
+        return Ok((rest, PipelineStage::Unwrap(field.to_string())));
+    }
+
+    // Try "regexp" keyword — named-capture field extraction
+    if let Ok((rest, _)) =
+        tag::<&str, &str, nom::error::Error<&str>>("regexp").parse_complete(input)
+        && is_keyword_boundary(rest)
+    {
+        let (rest, _) = multispace0().parse_complete(rest)?;
+        let (rest, pattern) = cut(parse_quoted_string).parse_complete(rest)?;
+        let re = Regex::new(&pattern).map_err(|_| {
+            nom::Err::Failure(nom::error::Error::new(rest, nom::error::ErrorKind::Verify))
+        })?;
+        return Ok((rest, PipelineStage::RegexpExtract(pattern, re)));
+    }
+
+    // Otherwise parse label filter: key op value
+    // Two forms: numeric comparison (key >= 500) or string match (key = "val")
     let (input, key) =
         nom::bytes::take_while1(|c: char| c.is_alphanumeric() || c == '_').parse_complete(input)?;
     let (input, _) = multispace0().parse_complete(input)?;
+
+    // Try numeric comparison operators (>=, <=, >, <)
+    let compare_result = match input {
+        s if s.starts_with(">=") => Some((&s[2..], CompareOp::Gte)),
+        s if s.starts_with("<=") => Some((&s[2..], CompareOp::Lte)),
+        s if let Some(rest) = s.strip_prefix('>') => Some((rest, CompareOp::Gt)),
+        s if let Some(rest) = s.strip_prefix('<') => Some((rest, CompareOp::Lt)),
+        _ => None,
+    };
+    if let Some((rest, op)) = compare_result {
+        let (rest, _) = multispace0().parse_complete(rest)?;
+        let (rest, num_str) = nom::bytes::take_while1(|c: char| {
+            c.is_ascii_digit() || c == '.' || c == '-' || c == '+'
+        })
+        .parse_complete(rest)?;
+        let value: f64 = num_str.parse().map_err(|_| {
+            nom::Err::Failure(nom::error::Error::new(rest, nom::error::ErrorKind::Verify))
+        })?;
+        return Ok((
+            rest,
+            PipelineStage::CompareFilter {
+                key: key.to_string(),
+                op,
+                value,
+            },
+        ));
+    }
+
+    // Fall back to string match operators (=, !=, =~, !~)
     let (input, op) = alt((
         map(tag("=~"), |_| MatchOp::Regex),
         map(tag("!~"), |_| MatchOp::NotRegex),
@@ -410,12 +481,6 @@ fn parse_json_or_label_filter(input: &str) -> IResult<&str, PipelineStage> {
             compiled_regex,
         },
     ))
-}
-
-fn is_keyword_boundary(rest: &str) -> bool {
-    rest.chars()
-        .next()
-        .is_none_or(|next| !next.is_alphanumeric() && next != '_')
 }
 
 fn parse_line_contains(input: &str) -> IResult<&str, PipelineStage> {
@@ -450,6 +515,12 @@ fn parse_line_not_regex(input: &str) -> IResult<&str, PipelineStage> {
         nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Verify))
     })?;
     Ok((input, PipelineStage::LineNotRegex(pattern, re)))
+}
+
+fn is_keyword_boundary(rest: &str) -> bool {
+    rest.chars()
+        .next()
+        .is_none_or(|next| !next.is_alphanumeric() && next != '_')
 }
 
 #[cfg(test)]

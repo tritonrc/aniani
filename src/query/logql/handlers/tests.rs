@@ -150,7 +150,7 @@ fn test_format_logql_result_omits_trace_id_metadata_when_absent() {
 
     let result = LogQLResult::Streams(vec![StreamResult {
         labels: vec![("service".into(), "api".into())],
-        entries: vec![(1_000, "hello".into(), None)],
+        entries: vec![(1_000, "hello".into(), None, None, vec![])],
     }]);
     let json = format_logql_result(result, 10);
     let values = json["data"]["result"][0]["values"].as_array().unwrap();
@@ -193,6 +193,8 @@ fn test_format_logql_result_includes_trace_id_metadata_when_present() {
             2_000,
             "charged card".into(),
             Some("0102030405060708090a0b0c0d0e0f10".into()),
+            None,
+            vec![],
         )],
     }]);
     let json = format_logql_result(result, 10);

@@ -8,7 +8,6 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
-use opentelemetry_proto::tonic::common::v1::any_value;
 use prost::Message;
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
@@ -16,7 +15,7 @@ use std::sync::atomic::Ordering;
 
 use super::label::extract_resource_labels;
 use super::{decode_body, is_json_content_type, u64_to_i64_saturating};
-use crate::store::trace_store::{AttributeValue, Span, SpanEvent, SpanKind, SpanStatus};
+use crate::store::trace_store::{AttributeValue, Span, SpanEvent, SpanKind, SpanLink, SpanStatus};
 use crate::store::{AppState, SharedState};
 
 /// Accepted-count summary returned by [`ingest_traces`].
@@ -32,6 +31,9 @@ enum PreparedAttributeValue {
     Int(i64),
     Float(f64),
     Bool(bool),
+    Array(Vec<PreparedAttributeValue>),
+    Bytes(Vec<u8>),
+    KeyValueList(Vec<(String, PreparedAttributeValue)>),
 }
 
 /// Prepared (pre-intern) attribute pairs.
@@ -45,6 +47,15 @@ struct PreparedEvent {
 }
 
 #[derive(Debug, Clone)]
+struct PreparedLink {
+    trace_id: [u8; 16],
+    span_id: [u8; 8],
+    trace_state: Option<String>,
+    attributes: SmallVec<[(String, PreparedAttributeValue); 4]>,
+    flags: u32,
+}
+
+#[derive(Debug, Clone)]
 struct PreparedSpan {
     trace_id: [u8; 16],
     span_id: [u8; 8],
@@ -54,11 +65,17 @@ struct PreparedSpan {
     start_time_ns: i64,
     duration_ns: i64,
     status: SpanStatus,
+    status_message: Option<String>,
     kind: SpanKind,
     attributes: SmallVec<[(String, PreparedAttributeValue); 8]>,
     events: Vec<PreparedEvent>,
+    links: Vec<PreparedLink>,
     ingest_seq: u64,
 }
+
+/// One instrumentation-scope group: its prepared attributes and the spans
+/// emitted under that scope.
+type PreparedScopeGroup = (PreparedAttrs, Vec<PreparedSpan>);
 
 /// Handler for POST /v1/traces.
 ///
@@ -111,9 +128,10 @@ pub async fn traces_handler(
 /// service. Returns accepted trace/span counts.
 pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> TracesAccepted {
     // Each batch pairs one resource group's prepared resource attributes with
-    // its spans. Resource attributes are prepared once per group (not cloned
-    // per span) and interned once under the write lock.
-    let mut prepared_batches: Vec<(PreparedAttrs, Vec<PreparedSpan>)> = Vec::new();
+    // its scope groups. Each scope group pairs its own scope attributes with
+    // the prepared spans. Both resource and scope attributes are prepared once
+    // per group (not cloned per span) and interned once under the write lock.
+    let mut prepared_batches: Vec<(PreparedAttrs, Vec<PreparedScopeGroup>)> = Vec::new();
     let mut trace_ids = FxHashSet::default();
     let mut total_spans: usize = 0;
 
@@ -134,8 +152,10 @@ pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> Tr
             })
             .collect();
 
-        let mut spans = Vec::new();
+        let mut scope_groups: Vec<(PreparedAttrs, Vec<PreparedSpan>)> = Vec::new();
         for scope_spans in &resource_spans.scope_spans {
+            let scope_attrs = prepare_scope_attrs(&scope_spans.scope);
+            let mut spans = Vec::new();
             for otlp_span in &scope_spans.spans {
                 let trace_id: [u8; 16] = match otlp_span.trace_id.as_slice().try_into() {
                     Ok(id) if id != [0u8; 16] => id,
@@ -174,6 +194,11 @@ pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> Tr
                     },
                     None => SpanStatus::Unset,
                 };
+                let status_message = otlp_span
+                    .status
+                    .as_ref()
+                    .map(|s| s.message.clone())
+                    .filter(|m| !m.is_empty());
 
                 let start_time_ns = u64_to_i64_saturating(otlp_span.start_time_unix_nano);
                 let end_time_ns = u64_to_i64_saturating(otlp_span.end_time_unix_nano);
@@ -216,6 +241,40 @@ pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> Tr
                     })
                     .collect();
 
+                // Span links — cross-trace references. Invalid/zero trace or
+                // span IDs are skipped (a link must identify a concrete span).
+                let links: Vec<PreparedLink> = otlp_span
+                    .links
+                    .iter()
+                    .filter_map(|link| {
+                        let link_trace_id: [u8; 16] = link.trace_id.as_slice().try_into().ok()?;
+                        let link_span_id: [u8; 8] = link.span_id.as_slice().try_into().ok()?;
+                        if link_trace_id == [0u8; 16] || link_span_id == [0u8; 8] {
+                            return None;
+                        }
+                        let attributes = link
+                            .attributes
+                            .iter()
+                            .filter_map(|attr| {
+                                let av = convert_any_value(attr.value.as_ref()?)?;
+                                Some((attr.key.clone(), av))
+                            })
+                            .collect();
+                        let trace_state = if link.trace_state.is_empty() {
+                            None
+                        } else {
+                            Some(link.trace_state.clone())
+                        };
+                        Some(PreparedLink {
+                            trace_id: link_trace_id,
+                            span_id: link_span_id,
+                            trace_state,
+                            attributes,
+                            flags: link.flags,
+                        })
+                    })
+                    .collect();
+
                 trace_ids.insert(trace_id);
                 spans.push(PreparedSpan {
                     trace_id,
@@ -226,30 +285,42 @@ pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> Tr
                     start_time_ns,
                     duration_ns,
                     status,
+                    status_message,
                     kind,
                     attributes,
                     events,
+                    links,
                     ingest_seq: state.ingest_seq.fetch_add(1, Ordering::Relaxed),
                 });
             }
+            total_spans += spans.len();
+            scope_groups.push((scope_attrs, spans));
         }
 
-        total_spans += spans.len();
-        prepared_batches.push((resource_attrs, spans));
+        prepared_batches.push((resource_attrs, scope_groups));
     }
 
     let mut store = state.trace_store.write();
-    for (resource_attrs, prepared_batch) in prepared_batches {
+    for (resource_attrs, scope_groups) in prepared_batches {
         // Intern resource attributes once for the whole batch.
         let resource_spurs: SmallVec<[(lasso::Spur, AttributeValue); 8]> = resource_attrs
             .into_iter()
             .map(|(key, value)| intern_attribute(&mut store, key, value))
             .collect();
-        let spans: Vec<Span> = prepared_batch
-            .into_iter()
-            .map(|prepared| intern_prepared_span(&mut store, prepared, &resource_spurs))
-            .collect();
-        store.ingest_spans(spans);
+        for (scope_attrs, prepared_batch) in scope_groups {
+            // Intern scope attributes once per scope group.
+            let scope_spurs: SmallVec<[(lasso::Spur, AttributeValue); 8]> = scope_attrs
+                .into_iter()
+                .map(|(key, value)| intern_attribute(&mut store, key, value))
+                .collect();
+            let spans: Vec<Span> = prepared_batch
+                .into_iter()
+                .map(|prepared| {
+                    intern_prepared_span(&mut store, prepared, &resource_spurs, &scope_spurs)
+                })
+                .collect();
+            store.ingest_spans(spans);
+        }
     }
 
     TracesAccepted {
@@ -261,26 +332,77 @@ pub fn ingest_traces(state: &AppState, request: ExportTraceServiceRequest) -> Tr
 fn convert_any_value(
     val: &opentelemetry_proto::tonic::common::v1::AnyValue,
 ) -> Option<PreparedAttributeValue> {
+    use opentelemetry_proto::tonic::common::v1::any_value::Value;
     match &val.value {
-        Some(any_value::Value::StringValue(s)) => Some(PreparedAttributeValue::String(s.clone())),
-        Some(any_value::Value::IntValue(i)) => Some(PreparedAttributeValue::Int(*i)),
-        Some(any_value::Value::DoubleValue(f)) => Some(PreparedAttributeValue::Float(*f)),
-        Some(any_value::Value::BoolValue(b)) => Some(PreparedAttributeValue::Bool(*b)),
+        Some(Value::StringValue(s)) => Some(PreparedAttributeValue::String(s.clone())),
+        Some(Value::IntValue(i)) => Some(PreparedAttributeValue::Int(*i)),
+        Some(Value::DoubleValue(f)) => Some(PreparedAttributeValue::Float(*f)),
+        Some(Value::BoolValue(b)) => Some(PreparedAttributeValue::Bool(*b)),
+        Some(Value::BytesValue(b)) => Some(PreparedAttributeValue::Bytes(b.clone())),
+        Some(Value::ArrayValue(arr)) => Some(PreparedAttributeValue::Array(
+            arr.values.iter().filter_map(convert_any_value).collect(),
+        )),
+        Some(Value::KvlistValue(kv)) => Some(PreparedAttributeValue::KeyValueList(
+            kv.values
+                .iter()
+                .filter_map(|entry| {
+                    let val = convert_any_value(entry.value.as_ref()?)?;
+                    Some((entry.key.clone(), val))
+                })
+                .collect(),
+        )),
         _ => None,
     }
+}
+
+/// Extract OTLP `InstrumentationScope` fields as `scope.*` attribute pairs.
+///
+/// `scope.name` and `scope.version` are emitted only when non-empty; scope
+/// attributes are namespaced as `scope.<key>`. Mirrors the `resource.*`
+/// convention so scope is queryable via TraceQL without a dedicated field.
+fn prepare_scope_attrs(
+    scope: &Option<opentelemetry_proto::tonic::common::v1::InstrumentationScope>,
+) -> PreparedAttrs {
+    let Some(scope) = scope.as_ref() else {
+        return SmallVec::new();
+    };
+    let mut attrs: PreparedAttrs = SmallVec::new();
+    if !scope.name.is_empty() {
+        attrs.push((
+            "scope.name".to_string(),
+            PreparedAttributeValue::String(scope.name.clone()),
+        ));
+    }
+    if !scope.version.is_empty() {
+        attrs.push((
+            "scope.version".to_string(),
+            PreparedAttributeValue::String(scope.version.clone()),
+        ));
+    }
+    for attr in &scope.attributes {
+        if let Some(val) = attr.value.as_ref()
+            && let Some(av) = convert_any_value(val)
+        {
+            let key = format!("scope.{}", attr.key);
+            attrs.push((key, av));
+        }
+    }
+    attrs
 }
 
 fn intern_prepared_span(
     store: &mut crate::store::TraceStore,
     prepared: PreparedSpan,
     resource_spurs: &SmallVec<[(lasso::Spur, AttributeValue); 8]>,
+    scope_spurs: &SmallVec<[(lasso::Spur, AttributeValue); 8]>,
 ) -> Span {
     let name = store.interner.get_or_intern(&prepared.name);
     let service_name = store.interner.get_or_intern(&prepared.service_name);
-    // Resource attributes (interned once per resource group) are prepended; the
-    // per-span clone is cheap Spur pairs (no String allocation). Span-specific
-    // attributes are interned here.
+    // Resource and scope attributes (interned once per group) are prepended;
+    // the per-span clone is cheap Spur pairs (no String allocation). Span-
+    // specific attributes are interned here.
     let mut attributes = resource_spurs.clone();
+    attributes.extend(scope_spurs.iter().cloned());
     attributes.extend(
         prepared
             .attributes
@@ -302,6 +424,22 @@ fn intern_prepared_span(
         })
         .collect();
 
+    let links = prepared
+        .links
+        .into_iter()
+        .map(|link| SpanLink {
+            trace_id: link.trace_id,
+            span_id: link.span_id,
+            trace_state: link.trace_state.map(|s| store.interner.get_or_intern(s)),
+            attributes: link
+                .attributes
+                .into_iter()
+                .map(|(key, value)| intern_attribute(store, key, value))
+                .collect(),
+            flags: link.flags,
+        })
+        .collect();
+
     Span {
         trace_id: prepared.trace_id,
         span_id: prepared.span_id,
@@ -311,27 +449,303 @@ fn intern_prepared_span(
         start_time_ns: prepared.start_time_ns,
         duration_ns: prepared.duration_ns,
         status: prepared.status,
+        status_message: prepared
+            .status_message
+            .map(|m| store.interner.get_or_intern(m)),
         kind: prepared.kind,
         attributes,
         events,
+        links,
         ingest_seq: prepared.ingest_seq,
     }
 }
 
 /// Intern a single prepared attribute key/value pair against the store.
+/// Recursively interns string data inside arrays and key-value lists.
 fn intern_attribute(
     store: &mut crate::store::TraceStore,
     key: String,
     value: PreparedAttributeValue,
 ) -> (lasso::Spur, AttributeValue) {
     let key = store.interner.get_or_intern(key);
-    let value = match value {
+    let value = intern_value(store, value);
+    (key, value)
+}
+
+/// Intern a [`PreparedAttributeValue`] into its stored [`AttributeValue`],
+/// interning any nested string-like data.
+fn intern_value(
+    store: &mut crate::store::TraceStore,
+    value: PreparedAttributeValue,
+) -> AttributeValue {
+    match value {
         PreparedAttributeValue::String(s) => {
             AttributeValue::String(store.interner.get_or_intern(s))
         }
         PreparedAttributeValue::Int(i) => AttributeValue::Int(i),
         PreparedAttributeValue::Float(f) => AttributeValue::Float(f),
         PreparedAttributeValue::Bool(b) => AttributeValue::Bool(b),
-    };
-    (key, value)
+        PreparedAttributeValue::Bytes(b) => AttributeValue::Bytes(b),
+        PreparedAttributeValue::Array(items) => {
+            AttributeValue::Array(items.into_iter().map(|v| intern_value(store, v)).collect())
+        }
+        PreparedAttributeValue::KeyValueList(pairs) => AttributeValue::KeyValueList(
+            pairs
+                .into_iter()
+                .map(|(k, v)| (store.interner.get_or_intern(k), intern_value(store, v)))
+                .collect(),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::empty_test_state;
+    use opentelemetry_proto::tonic::resource::v1::Resource;
+    use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span, Status};
+
+    fn one_span_request(status: Option<Status>) -> ExportTraceServiceRequest {
+        ExportTraceServiceRequest {
+            resource_spans: vec![ResourceSpans {
+                resource: Some(Resource::default()),
+                scope_spans: vec![ScopeSpans {
+                    spans: vec![Span {
+                        trace_id: vec![1; 16],
+                        span_id: vec![2; 8],
+                        status,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+        }
+    }
+    #[test]
+    fn status_message_is_captured_when_present() {
+        let state = empty_test_state();
+        let req = one_span_request(Some(Status {
+            code: 2,
+            message: "connection refused".into(),
+        }));
+        ingest_traces(&state, req);
+        let store = state.trace_store.read();
+        let spans = store.get_trace(&[1u8; 16]).unwrap();
+        assert_eq!(spans[0].status, SpanStatus::Error);
+        let msg = spans[0].status_message.expect("status message stored");
+        assert_eq!(store.resolve(&msg), "connection refused");
+    }
+
+    #[test]
+    fn status_message_is_none_when_empty() {
+        let state = empty_test_state();
+        let req = one_span_request(Some(Status {
+            code: 2,
+            message: String::new(),
+        }));
+        ingest_traces(&state, req);
+        let store = state.trace_store.read();
+        let spans = store.get_trace(&[1u8; 16]).unwrap();
+        assert_eq!(spans[0].status, SpanStatus::Error);
+        assert!(spans[0].status_message.is_none());
+    }
+
+    #[test]
+    fn span_links_are_captured_when_present() {
+        use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
+        use opentelemetry_proto::tonic::trace::v1::span::Link as OtlpLink;
+
+        let state = empty_test_state();
+        let req = ExportTraceServiceRequest {
+            resource_spans: vec![ResourceSpans {
+                resource: Some(Resource::default()),
+                scope_spans: vec![ScopeSpans {
+                    spans: vec![Span {
+                        trace_id: vec![1; 16],
+                        span_id: vec![2; 8],
+                        links: vec![
+                            OtlpLink {
+                                trace_id: vec![0xaa; 16],
+                                span_id: vec![0xbb; 8],
+                                trace_state: "congo=1".into(),
+                                attributes: vec![KeyValue {
+                                    key: "link.cause".into(),
+                                    value: Some(AnyValue {
+                                        value: Some(any_value::Value::StringValue("retry".into())),
+                                    }),
+                                }],
+                                flags: 1,
+                                ..Default::default()
+                            },
+                            // Zero IDs must be skipped.
+                            OtlpLink {
+                                trace_id: vec![0; 16],
+                                span_id: vec![0; 8],
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+        };
+        ingest_traces(&state, req);
+        let store = state.trace_store.read();
+        let spans = store.get_trace(&[1u8; 16]).unwrap();
+        assert_eq!(spans[0].links.len(), 1);
+        let link = &spans[0].links[0];
+        assert_eq!(link.trace_id, [0xaa; 16]);
+        assert_eq!(link.span_id, [0xbb; 8]);
+        assert_eq!(link.flags, 1);
+        let ts = link.trace_state.expect("trace_state stored");
+        assert_eq!(store.resolve(&ts), "congo=1");
+        assert_eq!(link.attributes.len(), 1);
+        let (k, v) = &link.attributes[0];
+        assert_eq!(store.resolve(k), "link.cause");
+        assert_eq!(store.resolve_attribute_value(v), "retry");
+    }
+
+    #[test]
+    fn instrumentation_scope_is_promoted_to_scope_attrs() {
+        use opentelemetry_proto::tonic::common::v1::{
+            AnyValue, InstrumentationScope, KeyValue, any_value,
+        };
+
+        let state = empty_test_state();
+        let req = ExportTraceServiceRequest {
+            resource_spans: vec![ResourceSpans {
+                resource: Some(Resource::default()),
+                scope_spans: vec![ScopeSpans {
+                    scope: Some(InstrumentationScope {
+                        name: "io.opentelemetry.sdk".into(),
+                        version: "1.30.0".into(),
+                        attributes: vec![KeyValue {
+                            key: "scope.attr".into(),
+                            value: Some(AnyValue {
+                                value: Some(any_value::Value::StringValue("yes".into())),
+                            }),
+                        }],
+                        ..Default::default()
+                    }),
+                    spans: vec![Span {
+                        trace_id: vec![1; 16],
+                        span_id: vec![2; 8],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+        };
+        ingest_traces(&state, req);
+        let store = state.trace_store.read();
+        let spans = store.get_trace(&[1u8; 16]).unwrap();
+        let attrs: std::collections::HashMap<&str, &AttributeValue> = spans[0]
+            .attributes
+            .iter()
+            .map(|(k, v)| (store.resolve(k) as &str, v))
+            .collect();
+        assert!(attrs.contains_key("scope.name"));
+        assert!(attrs.contains_key("scope.version"));
+        assert!(attrs.contains_key("scope.scope.attr"));
+        match attrs.get("scope.name") {
+            Some(AttributeValue::String(s)) => assert_eq!(store.resolve(s), "io.opentelemetry.sdk"),
+            other => panic!("scope.name wrong shape: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn array_bytes_kvlist_attribute_values_are_captured() {
+        use opentelemetry_proto::tonic::common::v1::{
+            AnyValue, ArrayValue, KeyValue, KeyValueList, any_value,
+        };
+
+        let state = empty_test_state();
+        let req = ExportTraceServiceRequest {
+            resource_spans: vec![ResourceSpans {
+                resource: Some(Resource::default()),
+                scope_spans: vec![ScopeSpans {
+                    spans: vec![Span {
+                        trace_id: vec![1; 16],
+                        span_id: vec![2; 8],
+                        attributes: vec![
+                            KeyValue {
+                                key: "tags".into(),
+                                value: Some(AnyValue {
+                                    value: Some(any_value::Value::ArrayValue(ArrayValue {
+                                        values: vec![
+                                            AnyValue {
+                                                value: Some(any_value::Value::StringValue(
+                                                    "a".into(),
+                                                )),
+                                            },
+                                            AnyValue {
+                                                value: Some(any_value::Value::IntValue(3)),
+                                            },
+                                        ],
+                                    })),
+                                }),
+                            },
+                            KeyValue {
+                                key: "raw".into(),
+                                value: Some(AnyValue {
+                                    value: Some(any_value::Value::BytesValue(vec![0xca, 0xfe])),
+                                }),
+                            },
+                            KeyValue {
+                                key: "meta".into(),
+                                value: Some(AnyValue {
+                                    value: Some(any_value::Value::KvlistValue(KeyValueList {
+                                        values: vec![KeyValue {
+                                            key: "env".into(),
+                                            value: Some(AnyValue {
+                                                value: Some(any_value::Value::StringValue(
+                                                    "staging".into(),
+                                                )),
+                                            }),
+                                        }],
+                                    })),
+                                }),
+                            },
+                        ],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+        };
+        ingest_traces(&state, req);
+        let store = state.trace_store.read();
+        let spans = store.get_trace(&[1u8; 16]).unwrap();
+        let get = |key: &str| -> Option<&AttributeValue> {
+            spans[0]
+                .attributes
+                .iter()
+                .find(|(k, _)| store.resolve(k) == key)
+                .map(|(_, v)| v)
+        };
+        match get("span.tags") {
+            Some(AttributeValue::Array(items)) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(store.resolve_attribute_value(&items[1]), "3");
+            }
+            other => panic!("array value wrong shape: {other:?}"),
+        }
+        match get("span.raw") {
+            Some(AttributeValue::Bytes(b)) => assert_eq!(b, &vec![0xca, 0xfe]),
+            other => panic!("bytes value wrong shape: {other:?}"),
+        }
+        match get("span.meta") {
+            Some(AttributeValue::KeyValueList(pairs)) => {
+                assert_eq!(pairs.len(), 1);
+                assert_eq!(store.resolve(&pairs[0].0), "env");
+                assert_eq!(store.resolve_attribute_value(&pairs[0].1), "staging");
+            }
+            other => panic!("kvlist value wrong shape: {other:?}"),
+        }
+    }
 }

@@ -23,8 +23,11 @@ pub fn extract_key_values(attrs: &[KeyValue]) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Convert an AnyValue to a string representation.
-fn any_value_to_string(val: &AnyValue) -> Option<String> {
+/// Convert an AnyValue to a string representation for label extraction.
+///
+/// Returns `None` for complex types (Array, Kvlist, Bytes) — these don't
+/// make sense as stream/series labels and should be silently dropped.
+pub fn any_value_to_string(val: &AnyValue) -> Option<String> {
     match &val.value {
         Some(any_value::Value::StringValue(s)) => Some(s.clone()),
         Some(any_value::Value::IntValue(i)) => Some(i.to_string()),

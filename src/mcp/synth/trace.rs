@@ -17,6 +17,9 @@ pub struct SpanNode {
     pub start_time_ns: i64,
     pub duration_ms: f64,
     pub status: String,
+    /// OTLP `Status.message` (error description); omitted when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_message: Option<String>,
     /// Span attributes, populated only in `detailed` mode (empty in `concise`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub attributes: Vec<(String, String)>,
@@ -126,6 +129,7 @@ pub fn build_trace_tree(
                 crate::store::trace_store::SpanStatus::Unset => "unset",
             }
             .to_string(),
+            status_message: s.status_message.map(|m| store.resolve(&m).to_string()),
             attributes,
             children,
         }
@@ -169,9 +173,11 @@ mod tests {
                 start_time_ns: 0,
                 duration_ns: 100,
                 status: SpanStatus::Ok,
+                status_message: None,
                 kind: SpanKind::Server,
                 attributes: Default::default(),
                 events: vec![],
+                links: Vec::new(),
                 ingest_seq: 0,
             };
             let child = Span {
@@ -183,9 +189,11 @@ mod tests {
                 start_time_ns: 10,
                 duration_ns: 30,
                 status: SpanStatus::Ok,
+                status_message: None,
                 kind: SpanKind::Internal,
                 attributes: Default::default(),
                 events: vec![],
+                links: Vec::new(),
                 ingest_seq: 1,
             };
             traces.ingest_spans(vec![root, child]);
@@ -226,9 +234,11 @@ mod tests {
                     start_time_ns: i as i64,
                     duration_ns: 1,
                     status: SpanStatus::Ok,
+                    status_message: None,
                     kind: SpanKind::Internal,
                     attributes: Default::default(),
                     events: vec![],
+                    links: Vec::new(),
                     ingest_seq: i as u64,
                 });
             }
@@ -264,9 +274,11 @@ mod tests {
                 start_time_ns: 0,
                 duration_ns: 1,
                 status: SpanStatus::Ok,
+                status_message: None,
                 kind: SpanKind::Internal,
                 attributes: Default::default(),
                 events: vec![],
+                links: Vec::new(),
                 ingest_seq: 0,
             };
             traces.ingest_spans(vec![mk(a, b), mk(b, a)]);

@@ -331,3 +331,336 @@ fn convert_matchers(matchers: &Matchers) -> Vec<LabelMatcher> {
         })
         .collect()
 }
+
+/// Extract `(VectorSelector, range_ms)` from a matrix-selector `Expr`.
+fn extract_matrix<'a>(
+    arg: &'a Expr,
+    func_name: &str,
+) -> Result<(&'a VectorSelector, i64), PromQLError> {
+    let Expr::MatrixSelector(ms) = arg else {
+        return Err(PromQLError::Eval(format!(
+            "{func_name} requires a range vector argument",
+        )));
+    };
+    Ok((&ms.vs, duration_to_i64_ms(&ms.range)))
+}
+
+/// Build matchers from a VectorSelector, adding `__name__` if not present.
+fn vs_matchers(vs: &VectorSelector) -> Vec<LabelMatcher> {
+    let mut matchers = convert_matchers(&vs.matchers);
+    if let Some(name) = &vs.name
+        && !matchers.iter().any(|m| m.name == "__name__")
+    {
+        matchers.push(LabelMatcher {
+            name: "__name__".to_string(),
+            op: LabelMatchOp::Eq,
+            value: name.clone(),
+        });
+    }
+    matchers
+}
+
+/// Evaluate an `_over_time` aggregation function (avg/min/max/sum/count/last/present/stddev/stdvar).
+pub(super) fn eval_over_time(
+    func_name: &str,
+    arg: &Expr,
+    store: &MetricStore,
+    start_ms: i64,
+    end_ms: i64,
+    step_ms: i64,
+    instant: bool,
+) -> Result<PromQLResult, PromQLError> {
+    let (vs, range_ms) = extract_matrix(arg, func_name)?;
+    let matchers = vs_matchers(vs);
+    let series_ids = store.select_series(&matchers);
+    let offset_ms = offset_to_ms(&vs.offset);
+
+    let mut results = Vec::new();
+
+    if instant || step_ms == 0 {
+        let effective_end = end_ms.saturating_sub(offset_ms);
+        for sid in &series_ids {
+            let labels = store.get_series_labels(*sid).unwrap_or_default();
+            let samples =
+                store.get_samples(*sid, effective_end.saturating_sub(range_ms), effective_end);
+            if let Some(v) = compute_over_time(func_name, samples) {
+                results.push(SeriesResult {
+                    labels,
+                    samples: vec![(end_ms, v)],
+                });
+            }
+        }
+    } else {
+        for sid in &series_ids {
+            let labels = store.get_series_labels(*sid).unwrap_or_default();
+            let mut series_samples = Vec::new();
+            let mut t = start_ms;
+            while t <= end_ms {
+                let effective_t = t.saturating_sub(offset_ms);
+                let samples =
+                    store.get_samples(*sid, effective_t.saturating_sub(range_ms), effective_t);
+                if let Some(v) = compute_over_time(func_name, samples) {
+                    series_samples.push((t, v));
+                }
+                let Some(next_t) = advance_time(t, step_ms) else {
+                    break;
+                };
+                t = next_t;
+            }
+            if !series_samples.is_empty() {
+                results.push(SeriesResult {
+                    labels,
+                    samples: series_samples,
+                });
+            }
+        }
+    }
+
+    Ok(PromQLResult::InstantVector(results))
+}
+
+/// Evaluate `quantile_over_time(φ, range)`.
+pub(super) fn eval_quantile_over_time(
+    quantile: f64,
+    arg: &Expr,
+    store: &MetricStore,
+    start_ms: i64,
+    end_ms: i64,
+    step_ms: i64,
+    instant: bool,
+) -> Result<PromQLResult, PromQLError> {
+    let (vs, range_ms) = extract_matrix(arg, "quantile_over_time")?;
+    let matchers = vs_matchers(vs);
+    let series_ids = store.select_series(&matchers);
+    let offset_ms = offset_to_ms(&vs.offset);
+
+    let mut results = Vec::new();
+
+    if instant || step_ms == 0 {
+        let effective_end = end_ms.saturating_sub(offset_ms);
+        for sid in &series_ids {
+            let labels = store.get_series_labels(*sid).unwrap_or_default();
+            let samples =
+                store.get_samples(*sid, effective_end.saturating_sub(range_ms), effective_end);
+            if let Some(v) = quantile_over_time(quantile, samples) {
+                results.push(SeriesResult {
+                    labels,
+                    samples: vec![(end_ms, v)],
+                });
+            }
+        }
+    } else {
+        for sid in &series_ids {
+            let labels = store.get_series_labels(*sid).unwrap_or_default();
+            let mut series_samples = Vec::new();
+            let mut t = start_ms;
+            while t <= end_ms {
+                let effective_t = t.saturating_sub(offset_ms);
+                let samples =
+                    store.get_samples(*sid, effective_t.saturating_sub(range_ms), effective_t);
+                if let Some(v) = quantile_over_time(quantile, samples) {
+                    series_samples.push((t, v));
+                }
+                let Some(next_t) = advance_time(t, step_ms) else {
+                    break;
+                };
+                t = next_t;
+            }
+            if !series_samples.is_empty() {
+                results.push(SeriesResult {
+                    labels,
+                    samples: series_samples,
+                });
+            }
+        }
+    }
+
+    Ok(PromQLResult::InstantVector(results))
+}
+
+/// Evaluate `absent_over_time(range)`: returns 1 if the range is empty, else nothing.
+pub(super) fn eval_absent_over_time(
+    arg: &Expr,
+    store: &MetricStore,
+    start_ms: i64,
+    end_ms: i64,
+    step_ms: i64,
+    instant: bool,
+) -> Result<PromQLResult, PromQLError> {
+    let (vs, range_ms) = extract_matrix(arg, "absent_over_time")?;
+    let matchers = vs_matchers(vs);
+    let series_ids = store.select_series(&matchers);
+    let offset_ms = offset_to_ms(&vs.offset);
+
+    let mut results = Vec::new();
+
+    if instant || step_ms == 0 {
+        let effective_end = end_ms.saturating_sub(offset_ms);
+        let mut any_present = false;
+        for sid in &series_ids {
+            let samples =
+                store.get_samples(*sid, effective_end.saturating_sub(range_ms), effective_end);
+            if !samples.is_empty() {
+                any_present = true;
+                break;
+            }
+        }
+        if !any_present {
+            results.push(SeriesResult {
+                labels: Vec::new(),
+                samples: vec![(end_ms, 1.0)],
+            });
+        }
+    } else {
+        let mut series_samples = Vec::new();
+        let mut t = start_ms;
+        while t <= end_ms {
+            let effective_t = t.saturating_sub(offset_ms);
+            let mut any_present = false;
+            for sid in &series_ids {
+                let samples =
+                    store.get_samples(*sid, effective_t.saturating_sub(range_ms), effective_t);
+                if !samples.is_empty() {
+                    any_present = true;
+                    break;
+                }
+            }
+            if !any_present {
+                series_samples.push((t, 1.0));
+            }
+            let Some(next_t) = advance_time(t, step_ms) else {
+                break;
+            };
+            t = next_t;
+        }
+        if !series_samples.is_empty() {
+            results.push(SeriesResult {
+                labels: Vec::new(),
+                samples: series_samples,
+            });
+        }
+    }
+
+    Ok(PromQLResult::InstantVector(results))
+}
+
+/// Compute an `_over_time` aggregation over a window of samples.
+fn compute_over_time(func_name: &str, samples: &[Sample]) -> Option<f64> {
+    if samples.is_empty() {
+        return None;
+    }
+    let values: Vec<f64> = samples.iter().map(|s| s.value).collect();
+    Some(match func_name {
+        "avg_over_time" => values.iter().sum::<f64>() / values.len() as f64,
+        "min_over_time" => values.iter().copied().fold(f64::INFINITY, f64::min),
+        "max_over_time" => values.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        "sum_over_time" => values.iter().sum(),
+        "count_over_time" => values.len() as f64,
+        "last_over_time" => *values.last().unwrap(),
+        "present_over_time" => 1.0,
+        "stddev_over_time" => {
+            let n = values.len() as f64;
+            let mean = values.iter().sum::<f64>() / n;
+            let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n;
+            variance.sqrt()
+        }
+        "stdvar_over_time" => {
+            let n = values.len() as f64;
+            let mean = values.iter().sum::<f64>() / n;
+            values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n
+        }
+        _ => return None,
+    })
+}
+
+/// Compute `quantile_over_time` using linear interpolation.
+fn quantile_over_time(quantile: f64, samples: &[Sample]) -> Option<f64> {
+    if samples.is_empty() || !(0.0..=1.0).contains(&quantile) {
+        return None;
+    }
+    let mut values: Vec<f64> = samples.iter().map(|s| s.value).collect();
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    Some(super::functions::interpolate_quantile(&values, quantile))
+}
+
+/// Evaluate `changes()` or `resets()` over a range vector.
+///
+/// `changes` counts the number of times the value changes between adjacent samples.
+/// `resets` counts counter resets (value decreases) between adjacent samples.
+pub(super) fn eval_changes_or_resets(
+    func_name: &str,
+    arg: &Expr,
+    store: &MetricStore,
+    start_ms: i64,
+    end_ms: i64,
+    step_ms: i64,
+    instant: bool,
+) -> Result<PromQLResult, PromQLError> {
+    let (vs, range_ms) = extract_matrix(arg, func_name)?;
+    let matchers = vs_matchers(vs);
+    let series_ids = store.select_series(&matchers);
+    let offset_ms = offset_to_ms(&vs.offset);
+
+    let mut results = Vec::new();
+
+    if instant || step_ms == 0 {
+        let effective_end = end_ms.saturating_sub(offset_ms);
+        for sid in &series_ids {
+            let labels = store.get_series_labels(*sid).unwrap_or_default();
+            let samples =
+                store.get_samples(*sid, effective_end.saturating_sub(range_ms), effective_end);
+            if !samples.is_empty() {
+                let count = count_changes_or_resets(func_name, samples);
+                results.push(SeriesResult {
+                    labels,
+                    samples: vec![(end_ms, count)],
+                });
+            }
+        }
+    } else {
+        for sid in &series_ids {
+            let labels = store.get_series_labels(*sid).unwrap_or_default();
+            let mut series_samples = Vec::new();
+            let mut t = start_ms;
+            while t <= end_ms {
+                let effective_t = t.saturating_sub(offset_ms);
+                let samples =
+                    store.get_samples(*sid, effective_t.saturating_sub(range_ms), effective_t);
+                if !samples.is_empty() {
+                    let count = count_changes_or_resets(func_name, samples);
+                    series_samples.push((t, count));
+                }
+                let Some(next_t) = advance_time(t, step_ms) else {
+                    break;
+                };
+                t = next_t;
+            }
+            if !series_samples.is_empty() {
+                results.push(SeriesResult {
+                    labels,
+                    samples: series_samples,
+                });
+            }
+        }
+    }
+
+    Ok(PromQLResult::InstantVector(results))
+}
+
+fn count_changes_or_resets(func_name: &str, samples: &[Sample]) -> f64 {
+    let mut count = 0.0;
+    for i in 1..samples.len() {
+        match func_name {
+            "changes" => {
+                if samples[i].value != samples[i - 1].value {
+                    count += 1.0;
+                }
+            }
+            "resets" if samples[i].value < samples[i - 1].value => {
+                count += 1.0;
+            }
+            _ => {}
+        }
+    }
+    count
+}

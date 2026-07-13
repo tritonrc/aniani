@@ -23,6 +23,16 @@ export const Traces = {
       </div>
       <p v-if="error" class="error">{{ error }}</p>
       <p v-if="loading" class="muted">Loading…</p>
+      <div class="tr-aggregate" v-if="aggregate.length">
+        <button class="tv-btn" @click="showAggregate = !showAggregate">{{ showAggregate ? 'Hide' : 'Show' }} operation breakdown</button>
+        <div class="tr-aggregate-bars" v-if="showAggregate">
+          <div class="tr-aggregate-row" v-for="(r, i) in aggregate" :key="i" :title="r.count + ' matched span(s)' + (r.errors ? ', ' + r.errors + ' error(s)' : '')">
+            <span class="tr-aggregate-label"><span class="tr-aggregate-svc">{{ r.service }}</span><span class="tr-aggregate-op">{{ r.name }}</span></span>
+            <span class="tr-aggregate-track"><span class="tr-aggregate-bar" :class="{ err: r.errors }" :style="{ width: r.pct + '%' }"></span></span>
+            <span class="tr-aggregate-count">{{ r.count }}<span class="tr-aggregate-err" v-if="r.errors"> ({{ r.errors }}err)</span></span>
+          </div>
+        </div>
+      </div>
       <p v-if="!traces.length && ran && !loading && !error && !selectedId" class="muted">No traces matched.</p>
       <div class="traces-layout" v-if="traces.length || selectedId">
         <div class="tr-list-col" v-if="traces.length">
@@ -83,6 +93,7 @@ export const Traces = {
       routeTraceId: '', // set by applyRoute; consumed by open() below
       sortMode: 'recent',
       sortModes: ['recent', 'slowest', 'errors'],
+      showAggregate: false,
     }
   },
   computed: {
@@ -108,6 +119,26 @@ export const Traces = {
         arr.sort(cmpStartDesc)
       }
       return arr
+    },
+    // Flame-graph-style breakdown: flatten matched spans across all result
+    // traces, group by (service, operation), and size horizontal bars by
+    // count. Surfaces which operations dominate a multi-trace result set.
+    aggregate() {
+      const map = new Map()
+      for (const t of this.traces) {
+        for (const ss of t.spanSets || []) {
+          for (const sp of ss.spans || []) {
+            const key = (sp.serviceName || '?') + '\u0000' + (sp.name || '?')
+            const e = map.get(key) || { service: sp.serviceName || '?', name: sp.name || '?', count: 0, errors: 0 }
+            e.count++
+            if (sp.status === 'error') e.errors++
+            map.set(key, e)
+          }
+        }
+      }
+      const rows = [...map.values()].sort((a, b) => b.count - a.count)
+      const max = rows.length ? rows[0].count : 1
+      return rows.map((r) => ({ ...r, pct: Math.max(3, (r.count / max) * 100) }))
     },
   },
   methods: {

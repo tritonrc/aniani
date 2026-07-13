@@ -141,6 +141,21 @@ fn test_structural_descendant() {
 }
 
 #[test]
+fn test_structural_child_and_sibling() {
+    let child = parse_traceql(r#"{ kind = server } > { kind = client }"#).unwrap();
+    match child {
+        TraceQLExpr::Structural { op, .. } => assert_eq!(op, StructuralOp::Child),
+        _ => panic!("expected Structural"),
+    }
+
+    let sibling = parse_traceql(r#"{ name = "a" } ~ { name = "b" }"#).unwrap();
+    match sibling {
+        TraceQLExpr::Structural { op, .. } => assert_eq!(op, StructuralOp::Sibling),
+        _ => panic!("expected Structural"),
+    }
+}
+
+#[test]
 fn test_span_attribute_int() {
     let expr = parse_traceql(r#"{ span.http.status_code = 500 }"#).unwrap();
     match expr {
@@ -285,4 +300,94 @@ fn test_status_with_unsupported_operator_is_parse_error() {
 fn test_status_neq_still_parses() {
     let expr = parse_traceql("{ status != error }").unwrap();
     assert!(matches!(expr, TraceQLExpr::SpanSelector { .. }));
+}
+
+#[test]
+fn test_kind_selector() {
+    let expr = parse_traceql(r#"{ kind = server }"#).unwrap();
+    match expr {
+        TraceQLExpr::SpanSelector { conditions, .. } => match &conditions[0] {
+            SpanCondition::Kind { op, value } => {
+                assert_eq!(*op, CompareOp::Eq);
+                assert_eq!(*value, SpanKindValue::Server);
+            }
+            _ => panic!("expected Kind"),
+        },
+        _ => panic!("expected SpanSelector"),
+    }
+}
+
+#[test]
+fn test_kind_with_unsupported_operator_is_parse_error() {
+    for q in [
+        "{ kind >= server }",
+        "{ kind < client }",
+        "{ kind > internal }",
+        "{ kind <= consumer }",
+    ] {
+        let result = parse_traceql(q);
+        assert!(result.is_err(), "expected parse error for: {}", q);
+    }
+}
+
+#[test]
+fn test_kind_neq_still_parses() {
+    let expr = parse_traceql("{ kind != client }").unwrap();
+    assert!(matches!(expr, TraceQLExpr::SpanSelector { .. }));
+}
+
+#[test]
+fn test_event_name_selector() {
+    let expr = parse_traceql(r#"{ event.name = "exception" }"#).unwrap();
+    match expr {
+        TraceQLExpr::SpanSelector { conditions, .. } => match &conditions[0] {
+            SpanCondition::EventName { op, value } => {
+                assert_eq!(*op, CompareOp::Eq);
+                assert_eq!(value, "exception");
+            }
+            _ => panic!("expected EventName"),
+        },
+        _ => panic!("expected SpanSelector"),
+    }
+}
+#[test]
+fn test_event_attribute_selector() {
+    let expr = parse_traceql(r#"{ event.exception.type = "ConnectionError" }"#).unwrap();
+    match expr {
+        TraceQLExpr::SpanSelector { conditions, .. } => match &conditions[0] {
+            SpanCondition::EventAttribute { name, op, value } => {
+                assert_eq!(name, "exception.type");
+                assert_eq!(*op, CompareOp::Eq);
+                assert_eq!(*value, SpanValue::String("ConnectionError".into()));
+            }
+            _ => panic!("expected EventAttribute"),
+        },
+        _ => panic!("expected SpanSelector"),
+    }
+}
+
+#[test]
+fn test_boolean_literal_value() {
+    for (q, expected) in [
+        (r#"{ span.flag = true }"#, true),
+        (r#"{ span.flag = false }"#, false),
+    ] {
+        let expr = parse_traceql(q).unwrap();
+        match expr {
+            TraceQLExpr::SpanSelector { conditions, .. } => match &conditions[0] {
+                SpanCondition::Attribute { value, .. } => {
+                    assert_eq!(*value, SpanValue::Bool(expected), "failed for: {}", q);
+                }
+                _ => panic!("expected Attribute"),
+            },
+            _ => panic!("expected SpanSelector"),
+        }
+    }
+}
+
+#[test]
+fn test_boolean_keyword_is_not_truncated_by_identifier() {
+    // RHS identifiers that merely start with true/false must not parse as bools.
+    assert!(parse_traceql(r#"{ span.x = truely }"#).is_err());
+    assert!(parse_traceql(r#"{ span.x = falsehood }"#).is_err());
 }

@@ -14,7 +14,7 @@ use std::sync::atomic::Ordering;
 
 use super::label::{extract_resource_labels, promote_service_name};
 use super::{decode_body, is_json_content_type, u64_to_i64_saturating};
-use crate::store::metric_store::{MetricStoreError, Sample};
+use crate::store::metric_store::{MetricStoreError, MetricType, Sample};
 use crate::store::{AppState, SharedState};
 
 /// Accepted-count summary returned by [`ingest_metrics`].
@@ -23,6 +23,9 @@ pub struct MetricsAccepted {
     pub series: usize,
     pub samples: usize,
 }
+
+/// Collected per-metric metadata: `(normalized_name, type, help, unit)`.
+type PreparedMeta<'a> = (String, MetricType, Option<&'a str>, Option<&'a str>);
 
 /// Handler for POST /v1/metrics.
 ///
@@ -89,6 +92,7 @@ pub fn ingest_metrics(
 ) -> Result<MetricsAccepted, MetricStoreError> {
     type MetricData = (String, String, Vec<(String, String)>, Vec<Sample>);
     let mut prepared: Vec<MetricData> = Vec::new();
+    let mut meta: Vec<PreparedMeta> = Vec::new();
 
     for resource_metrics in &request.resource_metrics {
         let mut resource_labels = extract_resource_labels(&resource_metrics.resource);
@@ -99,9 +103,20 @@ pub fn ingest_metrics(
                 // Normalize OTLP metric names: dots to underscores for PromQL compatibility.
                 // OTLP uses dots (e.g. http.server.duration), PromQL grammar rejects dots.
                 let metric_name = metric.name.replace('.', "_");
+                let help = if metric.description.is_empty() {
+                    None
+                } else {
+                    Some(metric.description.as_str())
+                };
+                let unit = if metric.unit.is_empty() {
+                    None
+                } else {
+                    Some(metric.unit.as_str())
+                };
 
                 match &metric.data {
                     Some(Data::Gauge(gauge)) => {
+                        meta.push((metric_name.clone(), MetricType::Gauge, help, unit));
                         for dp in &gauge.data_points {
                             let labels = build_dp_labels(&resource_labels, &dp.attributes);
                             let value = extract_number_value(dp);
@@ -119,6 +134,12 @@ pub fn ingest_metrics(
                         }
                     }
                     Some(Data::Sum(sum)) => {
+                        let mt = if sum.is_monotonic {
+                            MetricType::Counter
+                        } else {
+                            MetricType::Gauge
+                        };
+                        meta.push((metric_name.clone(), mt, help, unit));
                         for dp in &sum.data_points {
                             let labels = build_dp_labels(&resource_labels, &dp.attributes);
                             let value = extract_number_value(dp);
@@ -136,6 +157,7 @@ pub fn ingest_metrics(
                         }
                     }
                     Some(Data::Histogram(hist)) => {
+                        meta.push((metric_name.clone(), MetricType::Histogram, help, unit));
                         for dp in &hist.data_points {
                             let base_labels = build_dp_labels(&resource_labels, &dp.attributes);
                             let ts_ms = u64_to_i64_saturating(dp.time_unix_nano) / 1_000_000;
@@ -196,6 +218,7 @@ pub fn ingest_metrics(
                         );
                     }
                     Some(Data::Summary(summary)) => {
+                        meta.push((metric_name.clone(), MetricType::Summary, help, unit));
                         for dp in &summary.data_points {
                             let base_labels = build_dp_labels(&resource_labels, &dp.attributes);
                             let ts_ms = u64_to_i64_saturating(dp.time_unix_nano) / 1_000_000;
@@ -265,6 +288,9 @@ pub fn ingest_metrics(
     for (name, _, labels, samples) in prepared {
         store.ingest_samples(&name, labels, samples);
     }
+    for (name, mt, help, unit) in &meta {
+        store.register_metric_metadata(name, Some(*mt), help.as_deref(), unit.as_deref());
+    }
 
     Ok(MetricsAccepted {
         series: series_count,
@@ -282,7 +308,7 @@ fn build_dp_labels(
     let mut labels = resource_labels.to_vec();
     for attr in attrs {
         if let Some(val) = &attr.value
-            && let Some(s) = any_value_to_string(val)
+            && let Some(s) = super::label::any_value_to_string(val)
         {
             labels.push((attr.key.clone(), s));
         }
@@ -296,16 +322,5 @@ fn extract_number_value(dp: &opentelemetry_proto::tonic::metrics::v1::NumberData
         Some(Value::AsDouble(d)) => *d,
         Some(Value::AsInt(i)) => *i as f64,
         None => 0.0,
-    }
-}
-
-fn any_value_to_string(val: &opentelemetry_proto::tonic::common::v1::AnyValue) -> Option<String> {
-    use opentelemetry_proto::tonic::common::v1::any_value::Value;
-    match &val.value {
-        Some(Value::StringValue(s)) => Some(s.clone()),
-        Some(Value::IntValue(i)) => Some(i.to_string()),
-        Some(Value::DoubleValue(f)) => Some(f.to_string()),
-        Some(Value::BoolValue(b)) => Some(b.to_string()),
-        _ => None,
     }
 }

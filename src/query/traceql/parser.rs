@@ -65,6 +65,10 @@ pub enum PipelineStage {
 pub enum StructuralOp {
     /// `>>` descendant
     Descendant,
+    /// `>` direct child
+    Child,
+    /// `~` sibling (shared parent)
+    Sibling,
 }
 
 /// A condition within a span selector.
@@ -84,8 +88,21 @@ pub enum SpanCondition {
         op: CompareOp,
         value: SpanStatusValue,
     },
+    /// Span kind comparison: `kind = server|client|...`.
+    Kind { op: CompareOp, value: SpanKindValue },
     /// Span name comparison: `name op "value"`.
     Name { op: CompareOp, value: String },
+    /// Event name comparison: `event.name op "value"` — matches if any event
+    /// on the span has a name satisfying the operator.
+    EventName { op: CompareOp, value: String },
+    /// Event attribute comparison: `event.<key> op value` — matches if any
+    /// event on the span carries an attribute with the given key satisfying
+    /// the operator.
+    EventAttribute {
+        name: String,
+        op: CompareOp,
+        value: SpanValue,
+    },
 }
 
 /// Attribute scope.
@@ -113,6 +130,7 @@ pub enum SpanValue {
     String(String),
     Int(i64),
     Float(f64),
+    Bool(bool),
 }
 
 /// Logical operators between conditions.
@@ -128,6 +146,17 @@ pub enum SpanStatusValue {
     Ok,
     Error,
     Unset,
+}
+
+/// Span kind values, mirroring OTLP `SpanKind`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SpanKindValue {
+    Unspecified,
+    Internal,
+    Server,
+    Client,
+    Producer,
+    Consumer,
 }
 
 /// Parse a TraceQL expression.
@@ -163,14 +192,14 @@ fn parse_top_level(input: &str) -> IResult<&str, TraceQLExpr> {
     let (input, lhs) = parse_span_selector(input)?;
     let (input, _) = multispace0(input)?;
 
-    // Check for structural operator
-    if let Ok((input, _)) = tag::<&str, &str, nom::error::Error<&str>>(">>")(input) {
+    // Check for structural operator (>> must be tried before >).
+    if let Ok((input, op)) = parse_structural_op(input) {
         let (input, _) = multispace0(input)?;
         let (input, rhs) = parse_span_selector(input)?;
         Ok((
             input,
             TraceQLExpr::Structural {
-                op: StructuralOp::Descendant,
+                op,
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
             },
@@ -178,6 +207,17 @@ fn parse_top_level(input: &str) -> IResult<&str, TraceQLExpr> {
     } else {
         Ok((input, lhs))
     }
+}
+
+/// Parse a structural operator between two span selectors. Order matters:
+/// `>>` is tried before `>` so it isn't shadow-parsed as two child ops.
+fn parse_structural_op(input: &str) -> IResult<&str, StructuralOp> {
+    alt((
+        map(tag(">>"), |_| StructuralOp::Descendant),
+        map(tag(">"), |_| StructuralOp::Child),
+        map(tag("~"), |_| StructuralOp::Sibling),
+    ))
+    .parse_complete(input)
 }
 
 fn parse_span_selector(input: &str) -> IResult<&str, TraceQLExpr> {
@@ -258,8 +298,14 @@ fn parse_condition(input: &str) -> IResult<&str, SpanCondition> {
     if peek_keyword(input, "status") {
         return parse_status_condition(input);
     }
+    if peek_keyword(input, "kind") {
+        return parse_kind_condition(input);
+    }
     if peek_keyword(input, "name") {
         return parse_name_condition(input);
+    }
+    if input.starts_with("event.") {
+        return parse_event_condition(input);
     }
     parse_attribute_condition(input)
 }
@@ -308,6 +354,30 @@ fn parse_status_condition(input: &str) -> IResult<&str, SpanCondition> {
     Ok((input, SpanCondition::Status { op, value: status }))
 }
 
+fn parse_kind_condition(input: &str) -> IResult<&str, SpanCondition> {
+    let (input, _) = tag("kind")(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, op) = parse_compare_op(input)?;
+    let (input, _) = multispace0(input)?;
+    // Order matters: longer keywords first so "consumer" isn't truncated to "c".
+    let (input, kind) = alt((
+        map(tag("unspecified"), |_| SpanKindValue::Unspecified),
+        map(tag("internal"), |_| SpanKindValue::Internal),
+        map(tag("server"), |_| SpanKindValue::Server),
+        map(tag("client"), |_| SpanKindValue::Client),
+        map(tag("producer"), |_| SpanKindValue::Producer),
+        map(tag("consumer"), |_| SpanKindValue::Consumer),
+    ))
+    .parse_complete(input)?;
+    if !matches!(op, CompareOp::Eq | CompareOp::Neq) {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        )));
+    }
+    Ok((input, SpanCondition::Kind { op, value: kind }))
+}
+
 fn parse_name_condition(input: &str) -> IResult<&str, SpanCondition> {
     let (input, _) = tag("name")(input)?;
     let (input, _) = multispace0(input)?;
@@ -315,6 +385,33 @@ fn parse_name_condition(input: &str) -> IResult<&str, SpanCondition> {
     let (input, _) = multispace0(input)?;
     let (input, value) = parse_quoted_string(input)?;
     Ok((input, SpanCondition::Name { op, value }))
+}
+
+/// Parse an event-scoped condition: `event.name op "str"` or
+/// `event.<key> op value`. The `event.` prefix is consumed here; the
+/// remainder determines whether we match the event's name field or one of
+/// its attributes.
+fn parse_event_condition(input: &str) -> IResult<&str, SpanCondition> {
+    let (input, _) = tag("event.")(input)?;
+    let (input, key) =
+        take_while1(|c: char| c.is_alphanumeric() || c == '.' || c == '_' || c == '-')(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, op) = parse_compare_op(input)?;
+    let (input, _) = multispace0(input)?;
+    if key == "name" {
+        let (input, value) = parse_quoted_string(input)?;
+        Ok((input, SpanCondition::EventName { op, value }))
+    } else {
+        let (input, value) = parse_span_value(input)?;
+        Ok((
+            input,
+            SpanCondition::EventAttribute {
+                name: key.to_string(),
+                op,
+                value,
+            },
+        ))
+    }
 }
 
 fn parse_attribute_condition(input: &str) -> IResult<&str, SpanCondition> {
@@ -366,9 +463,26 @@ pub(super) fn parse_compare_op(input: &str) -> IResult<&str, CompareOp> {
 fn parse_span_value(input: &str) -> IResult<&str, SpanValue> {
     alt((
         map(parse_quoted_string, SpanValue::String),
+        parse_bool_value,
         parse_numeric_value,
     ))
     .parse_complete(input)
+}
+
+/// Parse a bare `true` / `false` literal, rejecting identifiers that merely
+/// start with those words (e.g. `trueish`).
+fn parse_bool_value(input: &str) -> IResult<&str, SpanValue> {
+    let (rest, word) = alt((
+        tag::<&str, &str, nom::error::Error<&str>>("true"),
+        tag("false"),
+    ))
+    .parse_complete(input)?;
+    match rest.chars().next() {
+        Some(c) if c.is_alphanumeric() || c == '_' || c == '.' => Err(nom::Err::Error(
+            nom::error::Error::new(input, nom::error::ErrorKind::Tag),
+        )),
+        _ => Ok((rest, SpanValue::Bool(word == "true"))),
+    }
 }
 
 fn parse_numeric_value(input: &str) -> IResult<&str, SpanValue> {

@@ -2,11 +2,11 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::store::trace_store::{AttributeValue, Span, SpanStatus, TraceStore};
+use crate::store::trace_store::{AttributeValue, Span, SpanKind, SpanStatus, TraceStore};
 
 use super::parser::{
-    AttrScope, CompareOp, LogicalOp, PipelineStage, SpanCondition, SpanStatusValue, SpanValue,
-    StructuralOp, TraceQLExpr,
+    AttrScope, CompareOp, LogicalOp, PipelineStage, SpanCondition, SpanKindValue, SpanStatusValue,
+    SpanValue, StructuralOp, TraceQLExpr,
 };
 
 /// Result of a TraceQL evaluation.
@@ -138,9 +138,16 @@ fn eval_span_selector(
     // Pre-compile regex patterns once, indexed by condition position.
     let compiled_regexes = precompile_regexes(conditions);
 
+    // Narrow the candidate trace set using the service/name/status indexes.
+    // Only valid under pure conjunction (no OR): index intersection assumes
+    // every narrowed condition must hold. Neq and regex conditions are never
+    // indexable, so they simply don't contribute and force a full per-span
+    // check (which still runs for correctness on the narrowed traces).
+    let candidate_ids = candidate_trace_ids(conditions, logical_ops, store);
+
     let mut results: Vec<TraceResult> = Vec::new();
 
-    for (trace_id, spans) in &store.traces {
+    let mut scan = |spans: &Vec<Span>, trace_id: [u8; 16]| {
         let matched: Vec<MatchedSpan> = spans
             .iter()
             .filter(|span| {
@@ -151,15 +158,124 @@ fn eval_span_selector(
 
         if !matched.is_empty() {
             results.push(TraceResult {
-                trace_id: *trace_id,
+                trace_id,
                 matched_spans: matched,
             });
+        }
+    };
+
+    match candidate_ids {
+        Some(ids) => {
+            for trace_id in ids {
+                if let Some(spans) = store.traces.get(&trace_id) {
+                    scan(spans, trace_id);
+                }
+            }
+        }
+        None => {
+            for (&trace_id, spans) in &store.traces {
+                scan(spans, trace_id);
+            }
         }
     }
 
     // Sort by trace_id for deterministic output
     results.sort_by_key(|a| a.trace_id);
     results
+}
+
+/// Compute a narrowed candidate trace-ID set from indexable `=` conditions.
+///
+/// Returns `None` when narrowing is unsafe (an OR is present) or when no
+/// condition is indexable — callers then fall back to a full scan. Only `=`
+/// (Eq) on name, status, or `resource.service.name` is indexable; `!=` never
+/// is, because the indexes map a key to traces that *contain* a matching span,
+/// not traces that *only* contain it.
+fn candidate_trace_ids(
+    conditions: &[SpanCondition],
+    logical_ops: &[LogicalOp],
+    store: &TraceStore,
+) -> Option<Vec<[u8; 16]>> {
+    if logical_ops.contains(&LogicalOp::Or) {
+        return None;
+    }
+
+    let mut candidate: Option<FxHashSet<[u8; 16]>> = None;
+    for cond in conditions {
+        if let Some(set) = indexable_traces(cond, store) {
+            candidate = Some(match candidate {
+                None => set,
+                Some(cur) => cur.intersection(&set).copied().collect(),
+            });
+        }
+    }
+    candidate.map(|s| s.into_iter().collect())
+}
+
+/// Look up the trace-ID set an indexable `=` condition resolves to, or `None`
+/// when the condition is not indexable (or the key isn't present in the store).
+fn indexable_traces(cond: &SpanCondition, store: &TraceStore) -> Option<FxHashSet<[u8; 16]>> {
+    match cond {
+        SpanCondition::Name {
+            op: CompareOp::Eq,
+            value,
+        } => store
+            .interner
+            .get(value)
+            .and_then(|spur| store.name_index.get(&spur).cloned()),
+        SpanCondition::Status {
+            op: CompareOp::Eq,
+            value,
+        } => {
+            let status = match value {
+                SpanStatusValue::Ok => SpanStatus::Ok,
+                SpanStatusValue::Error => SpanStatus::Error,
+                SpanStatusValue::Unset => SpanStatus::Unset,
+            };
+            store.status_index.get(&status).cloned()
+        }
+        SpanCondition::Attribute {
+            scope,
+            name,
+            op: CompareOp::Eq,
+            value: SpanValue::String(s),
+        } => indexed_attribute_traces(scope, name, s, store),
+        _ => None,
+    }
+}
+
+/// Resolve an indexable string `=` attribute condition to its candidate trace
+/// set. `resource.service.name` uses the dedicated service index; every other
+/// key consults the generic string attribute-value index, trying the same
+/// candidate keys the per-span evaluator matches (`span.<name>`; and
+/// `resource.<name>` plus the bare `<name>` fallback for resource scope).
+fn indexed_attribute_traces(
+    scope: &AttrScope,
+    name: &str,
+    value: &str,
+    store: &TraceStore,
+) -> Option<FxHashSet<[u8; 16]>> {
+    if *scope == AttrScope::Resource && name == "service.name" {
+        return store
+            .interner
+            .get(value)
+            .and_then(|spur| store.service_index.get(&spur).cloned());
+    }
+    let candidate_keys: Vec<String> = match scope {
+        AttrScope::Span => vec![format!("span.{}", name)],
+        AttrScope::Resource => vec![format!("resource.{}", name), name.to_string()],
+    };
+    let val_spur = store.interner.get(value)?;
+    let mut out: FxHashSet<[u8; 16]> = FxHashSet::default();
+    for key_str in &candidate_keys {
+        if let Some(key_spur) = store.interner.get(key_str)
+            && let Some(values) = store.attr_index.get(&key_spur)
+            && let Some(set) = values.get(&val_spur)
+        {
+            out.extend(set.iter().copied());
+        }
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// Pre-compile regex patterns from conditions. Returns one Option<Regex> per condition.
@@ -191,50 +307,68 @@ fn eval_structural(
     rhs: &TraceQLExpr,
     store: &TraceStore,
 ) -> Vec<TraceResult> {
-    match op {
-        StructuralOp::Descendant => {
-            let lhs_results = evaluate_traceql(lhs, store);
-            let rhs_results = evaluate_traceql(rhs, store);
+    let lhs_results = evaluate_traceql(lhs, store);
+    let rhs_results = evaluate_traceql(rhs, store);
 
-            // Find traces where an lhs span is an ancestor of an rhs span
-            let mut results = Vec::new();
+    let rhs_by_trace: FxHashMap<[u8; 16], &TraceResult> =
+        rhs_results.iter().map(|r| (r.trace_id, r)).collect();
 
-            let rhs_by_trace: FxHashMap<[u8; 16], &TraceResult> =
-                rhs_results.iter().map(|r| (r.trace_id, r)).collect();
+    let mut results = Vec::new();
+    for lhs_result in &lhs_results {
+        let Some(rhs_result) = rhs_by_trace.get(&lhs_result.trace_id) else {
+            continue;
+        };
+        let Some(trace_spans) = store.get_trace(&lhs_result.trace_id) else {
+            continue;
+        };
+        // Build span_map once per trace for parent lookups.
+        let span_map: FxHashMap<[u8; 8], &Span> =
+            trace_spans.iter().map(|s| (s.span_id, s)).collect();
 
-            for lhs_result in &lhs_results {
-                if let Some(rhs_result) = rhs_by_trace.get(&lhs_result.trace_id)
-                    && let Some(trace_spans) = store.get_trace(&lhs_result.trace_id)
-                {
-                    // Build span_map ONCE per trace, not per pair
-                    let span_map: FxHashMap<[u8; 8], &Span> =
-                        trace_spans.iter().map(|s| (s.span_id, s)).collect();
-
-                    let mut matched = Vec::new();
-
-                    for lhs_span in &lhs_result.matched_spans {
-                        for rhs_span in &rhs_result.matched_spans {
-                            if is_descendant(lhs_span.span_id, rhs_span.span_id, &span_map) {
-                                matched.push(rhs_span.clone());
-                            }
-                        }
+        let mut matched = Vec::new();
+        for lhs_span in &lhs_result.matched_spans {
+            for rhs_span in &rhs_result.matched_spans {
+                let related = match op {
+                    StructuralOp::Descendant => {
+                        is_descendant(lhs_span.span_id, rhs_span.span_id, &span_map)
                     }
-
-                    if !matched.is_empty() {
-                        // Deduplicate
-                        matched.sort_by_key(|s| s.span_id);
-                        matched.dedup_by_key(|s| s.span_id);
-                        results.push(TraceResult {
-                            trace_id: lhs_result.trace_id,
-                            matched_spans: matched,
-                        });
+                    StructuralOp::Child => is_child(lhs_span.span_id, rhs_span.span_id, &span_map),
+                    StructuralOp::Sibling => {
+                        is_sibling(lhs_span.span_id, rhs_span.span_id, &span_map)
                     }
+                };
+                if related {
+                    matched.push(rhs_span.clone());
                 }
             }
+        }
 
-            results
+        if !matched.is_empty() {
+            matched.sort_by_key(|s| s.span_id);
+            matched.dedup_by_key(|s| s.span_id);
+            results.push(TraceResult {
+                trace_id: lhs_result.trace_id,
+                matched_spans: matched,
+            });
         }
     }
+
+    results
+}
+
+/// Check if `parent_id` is the direct parent of `child_id`.
+fn is_child(parent_id: [u8; 8], child_id: [u8; 8], span_map: &FxHashMap<[u8; 8], &Span>) -> bool {
+    span_map.get(&child_id).and_then(|s| s.parent_span_id) == Some(parent_id)
+}
+
+/// Check if `a_id` and `b_id` share the same parent (and are distinct spans).
+fn is_sibling(a_id: [u8; 8], b_id: [u8; 8], span_map: &FxHashMap<[u8; 8], &Span>) -> bool {
+    if a_id == b_id {
+        return false;
+    }
+    let a_parent = span_map.get(&a_id).and_then(|s| s.parent_span_id);
+    let b_parent = span_map.get(&b_id).and_then(|s| s.parent_span_id);
+    a_parent == b_parent
 }
 
 /// Check if `ancestor_span_id` is an ancestor of `descendant_span_id`.
@@ -343,6 +477,41 @@ fn span_matches_condition(
             let span_name = store.resolve(&span.name);
             compare_string(span_name, op, value, compiled_regex)
         }
+        SpanCondition::Kind { op, value } => {
+            let kind_matches = match value {
+                SpanKindValue::Unspecified => span.kind == SpanKind::Unspecified,
+                SpanKindValue::Internal => span.kind == SpanKind::Internal,
+                SpanKindValue::Server => span.kind == SpanKind::Server,
+                SpanKindValue::Client => span.kind == SpanKind::Client,
+                SpanKindValue::Producer => span.kind == SpanKind::Producer,
+                SpanKindValue::Consumer => span.kind == SpanKind::Consumer,
+            };
+            match op {
+                CompareOp::Eq => kind_matches,
+                CompareOp::Neq => !kind_matches,
+                _ => false,
+            }
+        }
+        SpanCondition::EventName { op, value } => span
+            .events
+            .iter()
+            .any(|ev| compare_string(store.resolve(&ev.name), op, value, compiled_regex)),
+        SpanCondition::EventAttribute { name, op, value } => {
+            let mut found_key = false;
+            for ev in &span.events {
+                for (k, v) in &ev.attributes {
+                    if store.resolve(k) == name {
+                        found_key = true;
+                        if compare_attribute_value(v, op, value, compiled_regex, store) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            // Neq matches when no event carries the key at all, consistent
+            // with the absent-attribute semantics of span attribute Neq.
+            !found_key && matches!(op, CompareOp::Neq)
+        }
         SpanCondition::Attribute {
             scope,
             name,
@@ -428,6 +597,11 @@ fn compare_attribute_value(
                 false
             }
         }
+        (AttributeValue::Bool(b), SpanValue::Bool(t)) => match op {
+            CompareOp::Eq => b == t,
+            CompareOp::Neq => b != t,
+            _ => false,
+        },
         _ => false,
     }
 }

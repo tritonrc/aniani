@@ -29,11 +29,21 @@ function serviceFromResource(resource) {
   return (a && a.value && a.value.stringValue) || 'unknown'
 }
 
+// Map OTLP attributes into flat {key, value, title} rows. Long values —
+// common for the structured types (arrays, byte strings, key-value lists)
+// — are truncated for table density with the full text carried in `title`
+// for hover. `title` is empty for short values so the cell renders cleanly.
+const ATTR_VALUE_MAX = 96
 function mapAttrs(list) {
-  return (list || []).map((a) => ({
-    key: a.key,
-    value: (a.value && a.value.stringValue) != null ? String(a.value.stringValue) : '',
-  }))
+  return (list || []).map((a) => {
+    const raw = (a.value && a.value.stringValue) != null ? String(a.value.stringValue) : ''
+    const tooLong = raw.length > ATTR_VALUE_MAX
+    return {
+      key: a.key,
+      value: tooLong ? raw.slice(0, ATTR_VALUE_MAX) + '…' : raw,
+      title: tooLong ? raw : '',
+    }
+  })
 }
 
 // Normalize one OTLP span (from /api/traces/{id}) into a flat view model.
@@ -48,12 +58,20 @@ function normalizeSpan(sp, service) {
     startBig: toBigNs(sp.startTimeUnixNano),
     endBig: toBigNs(sp.endTimeUnixNano),
     statusCode: (sp.status && sp.status.code) || 0,
+    statusMessage: (sp.status && sp.status.message) || '',
     kind: sp.kind || 0,
     attributes: mapAttrs(sp.attributes),
     events: (sp.events || []).map((ev) => ({
       name: ev.name || '',
       timeBig: toBigNs(ev.timeUnixNano),
       attributes: mapAttrs(ev.attributes),
+    })),
+    links: (sp.links || []).map((l) => ({
+      traceId: l.traceId || '',
+      spanId: l.spanId || '',
+      traceState: l.traceState || '',
+      flags: l.flags || 0,
+      attributes: mapAttrs(l.attributes),
     })),
   }
 }
@@ -217,6 +235,25 @@ export const TraceView = {
       }
       return out
     },
+    // Bird's-eye Gantt of every span (ignoring collapse state), shown for large
+    // traces where the full waterfall needs scrolling. Thin colored bars pack
+    // the whole timeline so clusters and gaps are visible at a glance.
+    showMinimap() {
+      return (this.model && this.model.count >= 40) || false
+    },
+    minimapBars() {
+      const m = this.model
+      if (!m) return []
+      const total = m.totalNs || 1
+      return m.spans.map((s) => {
+        let leftPct = Math.min(100, Math.max(0, (s.offsetNs / total) * 100))
+        let widthPct = (s.durationNs / total) * 100
+        if (!isFinite(widthPct) || widthPct < 0) widthPct = 0
+        widthPct = Math.min(100, Math.max(widthPct, 0.3))
+        if (leftPct + widthPct > 100) leftPct = Math.max(0, 100 - widthPct)
+        return { uid: s.uid, leftPct, widthPct, color: m.serviceColor[s.service], error: s.statusCode === 2 }
+      })
+    },
   },
   methods: {
     formatDuration(ns) {
@@ -268,12 +305,12 @@ export const TraceView = {
     spanTags(span) {
       return span.attributes
         .filter((a) => a.key.indexOf('resource.') !== 0)
-        .map((a) => ({ key: a.key.indexOf('span.') === 0 ? a.key.slice(5) : a.key, value: a.value }))
+        .map((a) => ({ key: a.key.indexOf('span.') === 0 ? a.key.slice(5) : a.key, value: a.value, title: a.title || '' }))
     },
     processTags(span) {
       return span.attributes
         .filter((a) => a.key.indexOf('resource.') === 0)
-        .map((a) => ({ key: a.key.slice(9), value: a.value }))
+        .map((a) => ({ key: a.key.slice(9), value: a.value, title: a.title || '' }))
     },
     exceptions(span) {
       return span.events.filter(isException).map((ev) => ({
@@ -297,6 +334,15 @@ export const TraceView = {
       const end = span.endBig + 30_000_000_000n
       return href('logs', { q: '{service="' + escLabel(span.service) + '"}', start: String(start), end: String(end) })
     },
+    // Hash link to open a different trace (used by span-link pivots).
+    traceLinkHref(traceId) {
+      return href('traces', { trace: traceId })
+    },
+    // Abbreviate a 16/8-byte hex id for compact display.
+    shortId(id) {
+      if (!id) return ''
+      return id.length > 12 ? id.slice(0, 8) + '…' : id
+    },
   },
   template: `
     <div class="trace-view" v-if="model">
@@ -314,6 +360,15 @@ export const TraceView = {
         <span class="tv-legend-item" v-for="svc in model.services" :key="svc">
           <span class="tv-swatch" :style="{ background: model.serviceColor[svc] }"></span>{{ svc }}
         </span>
+      </div>
+      <div class="tv-minimap" v-if="showMinimap" :title="model.count + ' spans — overview'">
+        <span
+          v-for="b in minimapBars"
+          :key="'m' + b.uid"
+          class="tv-minimap-bar"
+          :class="{ err: b.error }"
+          :style="{ left: b.leftPct + '%', width: b.widthPct + '%', background: b.color }"
+        ></span>
       </div>
       <pre class="json" v-if="showRaw">{{ pretty(detail) }}</pre>
       <template v-else>
@@ -364,7 +419,7 @@ export const TraceView = {
                 <div><span class="k">Operation</span><span class="v">{{ row.span.name }}</span></div>
                 <div><span class="k">Logs</span><span class="v"><a :href="viewLogsHref(row.span)" class="pivot-link">View logs (±30s)</a></span></div>
                 <div><span class="k">Kind</span><span class="v">{{ kindLabel(row.span.kind) }}</span></div>
-                <div><span class="k">Status</span><span class="v" :class="statusClass(row.span.statusCode)">{{ statusLabel(row.span.statusCode) }}</span></div>
+                <div><span class="k">Status</span><span class="v" :class="statusClass(row.span.statusCode)">{{ statusLabel(row.span.statusCode) }}<span class="tl-status-msg" v-if="row.span.statusMessage"> — {{ row.span.statusMessage }}</span></span></div>
                 <div><span class="k">Duration</span><span class="v">{{ formatDuration(row.span.durationNs) }}</span></div>
                 <div><span class="k">Start</span><span class="v">+{{ formatDuration(row.span.offsetNs) }}</span></div>
                 <div><span class="k">Span ID</span><span class="v mono">{{ row.span.spanId }}</span></div>
@@ -382,13 +437,13 @@ export const TraceView = {
                 <div class="tl-section" v-if="spanTags(row.span).length">
                   <h4>Tags</h4>
                   <table class="tl-kv"><tbody>
-                    <tr v-for="(a, i) in spanTags(row.span)" :key="'t' + i"><td class="k">{{ a.key }}</td><td class="v">{{ a.value }}</td></tr>
+                    <tr v-for="(a, i) in spanTags(row.span)" :key="'t' + i"><td class="k">{{ a.key }}</td><td class="v" :title="a.title">{{ a.value }}</td></tr>
                   </tbody></table>
                 </div>
                 <div class="tl-section" v-if="processTags(row.span).length">
                   <h4>Process</h4>
                   <table class="tl-kv"><tbody>
-                    <tr v-for="(a, i) in processTags(row.span)" :key="'p' + i"><td class="k">{{ a.key }}</td><td class="v">{{ a.value }}</td></tr>
+                    <tr v-for="(a, i) in processTags(row.span)" :key="'p' + i"><td class="k">{{ a.key }}</td><td class="v" :title="a.title">{{ a.value }}</td></tr>
                   </tbody></table>
                 </div>
               </div>
@@ -397,7 +452,21 @@ export const TraceView = {
                 <div class="tl-event" v-for="(ev, i) in otherEvents(row.span)" :key="'e' + i">
                   <div class="tl-event-head">{{ ev.name }}<span class="tl-at"> @ +{{ formatDuration(ev.offsetNs) }}</span></div>
                   <table class="tl-kv" v-if="ev.attributes.length"><tbody>
-                    <tr v-for="(a, j) in ev.attributes" :key="j"><td class="k">{{ a.key }}</td><td class="v">{{ a.value }}</td></tr>
+                    <tr v-for="(a, j) in ev.attributes" :key="j"><td class="k">{{ a.key }}</td><td class="v" :title="a.title">{{ a.value }}</td></tr>
+                  </tbody></table>
+                </div>
+              </div>
+              <div class="tl-section" v-if="row.span.links && row.span.links.length">
+                <h4>Links</h4>
+                <div class="tl-link" v-for="(lk, i) in row.span.links" :key="'l' + i">
+                  <div class="tl-link-head">
+                    <a class="pivot-link" :href="traceLinkHref(lk.traceId)" :title="'Open linked trace ' + lk.traceId">{{ shortId(lk.traceId) }}</a>
+                    <span class="tl-link-span mono">/{{ shortId(lk.spanId) }}</span>
+                  </div>
+                  <table class="tl-kv" v-if="lk.traceState || lk.flags || lk.attributes.length"><tbody>
+                    <tr v-if="lk.traceState"><td class="k">traceState</td><td class="v mono">{{ lk.traceState }}</td></tr>
+                    <tr v-if="lk.flags"><td class="k">flags</td><td class="v mono">{{ lk.flags }}</td></tr>
+                    <tr v-for="(a, j) in lk.attributes" :key="j"><td class="k">{{ a.key }}</td><td class="v" :title="a.title">{{ a.value }}</td></tr>
                   </tbody></table>
                 </div>
               </div>

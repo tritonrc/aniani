@@ -55,12 +55,22 @@ impl SpanKind {
 }
 
 /// Attribute value types.
+///
+/// Covers all OTLP `AnyValue` variants: the four scalars plus `ArrayValue`,
+/// `BytesValue`, and `KeyValueList`. String-like data (including array/kvlist
+/// element strings and keys) is interned.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AttributeValue {
     String(Spur),
     Int(i64),
     Float(f64),
     Bool(bool),
+    /// Nested array of attribute values (OTLP ArrayValue).
+    Array(Vec<AttributeValue>),
+    /// Raw bytes, rendered as hex (OTLP BytesValue).
+    Bytes(Vec<u8>),
+    /// Key-value list (OTLP KvlistValue).
+    KeyValueList(Vec<(Spur, AttributeValue)>),
 }
 
 /// (name, status, service) keys snapshot used during targeted index
@@ -78,6 +88,22 @@ pub struct SpanEvent {
     pub attributes: SmallVec<[(Spur, AttributeValue); 4]>,
 }
 
+/// A cross-trace reference (OTLP `Span.link`). Points at a span in another
+/// trace, carrying its own context attributes. Used by batch/async processors
+/// and fan-out workloads to relate causally-linked spans across trace boundaries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpanLink {
+    pub trace_id: [u8; 16],
+    pub span_id: [u8; 8],
+    /// W3C `tracestate` header; stored only when non-empty.
+    #[serde(default)]
+    pub trace_state: Option<Spur>,
+    pub attributes: SmallVec<[(Spur, AttributeValue); 4]>,
+    /// W3C trace flags (e.g. sampled bit).
+    #[serde(default)]
+    pub flags: u32,
+}
+
 /// A trace span.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Span {
@@ -89,9 +115,16 @@ pub struct Span {
     pub start_time_ns: i64,
     pub duration_ns: i64,
     pub status: SpanStatus,
+    /// OTLP `Status.message` — the human-readable error description carried
+    /// alongside `status = error`. `None` when unset or for non-error statuses.
+    #[serde(default)]
+    pub status_message: Option<Spur>,
     pub kind: SpanKind,
     pub attributes: SmallVec<[(Spur, AttributeValue); 8]>,
     pub events: Vec<SpanEvent>,
+    /// Cross-trace references (OTLP `Span.link`).
+    #[serde(default)]
+    pub links: Vec<SpanLink>,
     /// Global monotonic ingest sequence; assigned on store insert.
     #[serde(default)]
     pub ingest_seq: u64,
@@ -134,6 +167,13 @@ pub struct TraceStore {
     pub name_index: FxHashMap<Spur, FxHashSet<[u8; 16]>>,
     /// Span status -> set of trace IDs.
     pub status_index: FxHashMap<SpanStatus, FxHashSet<[u8; 16]>>,
+    /// String attribute-value inverted index: attribute key (Spur) -> value
+    /// (Spur) -> set of trace IDs. Only `AttributeValue::String` values are
+    /// indexed, so TraceQL `=` conditions on hot string attributes (e.g.
+    /// `span.http.status_code`) can narrow candidate traces without a full
+    /// per-span scan. Rebuilt on eviction.
+    #[serde(default)]
+    pub attr_index: FxHashMap<Spur, FxHashMap<Spur, FxHashSet<[u8; 16]>>>,
     /// String interner.
     pub interner: Rodeo,
     /// Total span count for eviction.
@@ -148,6 +188,7 @@ impl TraceStore {
             service_index: FxHashMap::default(),
             name_index: FxHashMap::default(),
             status_index: FxHashMap::default(),
+            attr_index: FxHashMap::default(),
             interner: Rodeo::default(),
             total_spans: 0,
         }
@@ -169,6 +210,17 @@ impl TraceStore {
                 .entry(span.status)
                 .or_default()
                 .insert(trace_id);
+            // Index string-valued attributes for fast TraceQL `=` lookups.
+            for (key, val) in &span.attributes {
+                if let AttributeValue::String(v) = val {
+                    self.attr_index
+                        .entry(*key)
+                        .or_default()
+                        .entry(*v)
+                        .or_default()
+                        .insert(trace_id);
+                }
+            }
 
             self.traces.entry(trace_id).or_default().push(span);
             self.total_spans += 1;
@@ -211,6 +263,35 @@ impl TraceStore {
             AttributeValue::Int(i) => i.to_string(),
             AttributeValue::Float(f) => f.to_string(),
             AttributeValue::Bool(b) => b.to_string(),
+            AttributeValue::Array(items) => {
+                let parts: Vec<String> = items
+                    .iter()
+                    .map(|v| self.resolve_attribute_value(v))
+                    .collect();
+                format!("[{}]", parts.join(", "))
+            }
+            AttributeValue::Bytes(b) => {
+                use std::fmt::Write;
+                let mut hex = String::with_capacity(b.len() * 2 + 2);
+                let _ = write!(hex, "0x");
+                for byte in b {
+                    let _ = write!(hex, "{byte:02x}");
+                }
+                hex
+            }
+            AttributeValue::KeyValueList(pairs) => {
+                let parts: Vec<String> = pairs
+                    .iter()
+                    .map(|(k, v)| {
+                        format!(
+                            "{}={}",
+                            self.interner.resolve(k),
+                            self.resolve_attribute_value(v)
+                        )
+                    })
+                    .collect();
+                format!("{{{}}}", parts.join(", "))
+            }
         }
     }
 
@@ -255,6 +336,7 @@ impl TraceStore {
         self.service_index.retain(|_, v| !v.is_empty());
         self.name_index.retain(|_, v| !v.is_empty());
         self.status_index.retain(|_, v| !v.is_empty());
+        self.rebuild_attr_index();
     }
 
     /// Evict spans older than the given timestamp.
@@ -292,6 +374,7 @@ impl TraceStore {
         for (trace_id, before_keys) in changed {
             self.reconcile_trace_indexes(trace_id, &before_keys);
         }
+        self.rebuild_attr_index();
     }
 
     /// Build a TraceResult summary for a trace.
@@ -347,6 +430,7 @@ impl TraceStore {
         self.service_index.clear();
         self.name_index.clear();
         self.status_index.clear();
+        self.attr_index.clear();
         self.interner = Rodeo::default();
         self.total_spans = 0;
     }
@@ -378,6 +462,29 @@ impl TraceStore {
                     self.traces.remove(trace_id);
                 }
                 self.reconcile_trace_indexes(*trace_id, &before_keys);
+            }
+        }
+        self.rebuild_attr_index();
+    }
+
+    /// Rebuild the string attribute-value index from all surviving spans.
+    /// Called after eviction, which can remove individual spans or whole
+    /// traces; a full rebuild is simpler and obviously correct for the small
+    /// ephemeral store sizes aniani targets.
+    fn rebuild_attr_index(&mut self) {
+        self.attr_index.clear();
+        for (trace_id, spans) in &self.traces {
+            for span in spans {
+                for (key, val) in &span.attributes {
+                    if let AttributeValue::String(v) = val {
+                        self.attr_index
+                            .entry(*key)
+                            .or_default()
+                            .entry(*v)
+                            .or_default()
+                            .insert(*trace_id);
+                    }
+                }
             }
         }
     }
@@ -444,6 +551,11 @@ impl TraceStore {
                 for event in &span.events {
                     bytes += event.attributes.len() * std::mem::size_of::<(Spur, AttributeValue)>();
                 }
+                // Span links: the heap Vec of SpanLink plus each link's attributes
+                bytes += span.links.capacity() * std::mem::size_of::<SpanLink>();
+                for link in &span.links {
+                    bytes += link.attributes.len() * std::mem::size_of::<(Spur, AttributeValue)>();
+                }
             }
         }
 
@@ -468,6 +580,15 @@ impl TraceStore {
             bytes += set.len() * (std::mem::size_of::<[u8; 16]>() + 8);
         }
         bytes += self.status_index.len() * (std::mem::size_of::<SpanStatus>() + 8);
+
+        // String attribute-value index: FxHashMap<Spur, FxHashMap<Spur, FxHashSet<[u8; 16]>>>
+        for inner in self.attr_index.values() {
+            bytes += inner.len() * (std::mem::size_of::<Spur>() + 8);
+            for set in inner.values() {
+                bytes += set.len() * (std::mem::size_of::<[u8; 16]>() + 8);
+            }
+        }
+        bytes += self.attr_index.len() * (std::mem::size_of::<Spur>() + 8);
 
         // Interner memory
         bytes += self.interner.current_memory_usage();

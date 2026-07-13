@@ -8,7 +8,7 @@ use axum::response::IntoResponse;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::eval::{LogQLResult, evaluate_logql_limited};
+use super::eval::{LogQLResult, ResolvedEntry, evaluate_logql_limited};
 use super::parser::parse_logql;
 use crate::store::SharedState;
 
@@ -78,7 +78,7 @@ async fn query_inner(state: SharedState, params: QueryParams) -> (StatusCode, Js
                 );
             }
         },
-        None => (0, now_ns), // No time specified: search all data
+        None => (now_ns - 3_600_000_000_000, now_ns), // Default: last 1h
     };
 
     let limit = bounded_limit(params.limit);
@@ -242,24 +242,20 @@ fn format_logql_result(result: LogQLResult, limit: usize) -> Value {
             // timestamp descending (newest first), take `limit`, then redistribute.
             let total_entries: usize = streams.iter().map(|s| s.entries.len()).sum();
             if total_entries > limit {
-                let mut all: Vec<(usize, i64, String, Option<String>)> = streams
+                let mut all: Vec<(usize, ResolvedEntry)> = streams
                     .iter_mut()
                     .enumerate()
-                    .flat_map(|(idx, sr)| {
-                        sr.entries
-                            .drain(..)
-                            .map(move |(ts, line, trace_id)| (idx, ts, line, trace_id))
-                    })
+                    .flat_map(|(idx, sr)| sr.entries.drain(..).map(move |entry| (idx, entry)))
                     .collect();
-                all.sort_by_key(|b| std::cmp::Reverse(b.1)); // newest first
+                all.sort_by_key(|b| std::cmp::Reverse(b.1.0)); // newest first
                 all.truncate(limit);
                 // Put entries back into their streams
-                for (idx, ts, line, trace_id) in all {
-                    streams[idx].entries.push((ts, line, trace_id));
+                for (idx, entry) in all {
+                    streams[idx].entries.push(entry);
                 }
                 // Re-sort each stream's entries by timestamp ascending
                 for sr in &mut streams {
-                    sr.entries.sort_by_key(|(ts, _, _)| *ts);
+                    sr.entries.sort_by_key(|(ts, _, _, _, _)| *ts);
                 }
             }
 
@@ -275,14 +271,25 @@ fn format_logql_result(result: LogQLResult, limit: usize) -> Value {
                     // Loki structured-metadata shape: a 2-element array when there is
                     // no trace id (matches vanilla Loki), 3-element with a
                     // `{"trace_id": ...}` metadata object when there is one.
-                    let values: Vec<Value> = sr
-                        .entries
-                        .into_iter()
-                        .map(|(ts, line, trace_id)| match trace_id {
-                            Some(tid) => json!([ts.to_string(), line, {"trace_id": tid}]),
-                            None => json!([ts.to_string(), line]),
-                        })
-                        .collect();
+                    let values: Vec<Value> =
+                        sr.entries
+                            .into_iter()
+                            .map(|(ts, line, trace_id, span_id, attrs)| {
+                                let metadata: serde_json::Map<String, Value> = trace_id
+                                    .iter()
+                                    .map(|tid| ("trace_id".to_string(), Value::String(tid.clone())))
+                                    .chain(span_id.iter().map(|sid| {
+                                        ("span_id".to_string(), Value::String(sid.clone()))
+                                    }))
+                                    .chain(attrs.into_iter().map(|(k, v)| (k, Value::String(v))))
+                                    .collect();
+                                if metadata.is_empty() {
+                                    json!([ts.to_string(), line])
+                                } else {
+                                    json!([ts.to_string(), line, metadata])
+                                }
+                            })
+                            .collect();
                     json!({
                         "stream": labels_map,
                         "values": values,
@@ -341,42 +348,11 @@ fn now_ns() -> i64 {
 }
 
 fn parse_timestamp_ns(s: &str) -> Option<i64> {
-    // Try integer first (preserves precision for nanosecond timestamps)
-    if let Ok(n) = s.parse::<i64>() {
-        return Some(classify_to_ns(n));
-    }
-    // Try float seconds (e.g., "1700000000.5")
-    if let Ok(secs) = s.parse::<f64>() {
-        return float_seconds_to_ns(secs);
-    }
-    None
+    crate::ingest::parse_timestamp_ns(s)
 }
 
 fn bounded_limit(limit: Option<usize>) -> usize {
     limit.unwrap_or(DEFAULT_ENTRY_LIMIT).min(MAX_ENTRY_LIMIT)
-}
-
-fn float_seconds_to_ns(secs: f64) -> Option<i64> {
-    const NS_PER_SEC: f64 = 1_000_000_000.0;
-    if !secs.is_finite()
-        || secs > i64::MAX as f64 / NS_PER_SEC
-        || secs < i64::MIN as f64 / NS_PER_SEC
-    {
-        return None;
-    }
-    Some((secs * NS_PER_SEC) as i64)
-}
-
-fn classify_to_ns(n: i64) -> i64 {
-    if n > 1_000_000_000_000_000_000 {
-        n // already nanoseconds
-    } else if n > 1_000_000_000_000_000 {
-        n.saturating_mul(1_000) // microseconds -> ns
-    } else if n > 1_000_000_000_000 {
-        n.saturating_mul(1_000_000) // milliseconds -> ns
-    } else {
-        n.saturating_mul(1_000_000_000) // seconds -> ns
-    }
 }
 
 #[cfg(test)]

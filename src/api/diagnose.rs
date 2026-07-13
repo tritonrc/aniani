@@ -253,13 +253,24 @@ fn diagnose_service(state: &SharedState, service: &str) -> axum::response::Respo
         // Recent errors: bounded to last 1 hour, take top 10 by timestamp desc
         let mut errors: Vec<(i64, Value)> = Vec::new();
         for sid in &error_stream_ids {
+            let labels = store.get_stream_labels(*sid).unwrap_or_default();
             let entries = store.get_entries(*sid, lookback_start, now);
             for entry in entries {
+                let trace_id = entry.trace_id.as_ref().map(|b| {
+                    use std::fmt::Write;
+                    let mut s = String::with_capacity(32);
+                    for byte in b {
+                        let _ = write!(s, "{byte:02x}");
+                    }
+                    s
+                });
                 errors.push((
                     entry.timestamp_ns,
                     json!({
                         "timestamp": entry.timestamp_ns.to_string(),
                         "line": entry.line,
+                        "labels": labels,
+                        "trace_id": trace_id,
                     }),
                 ));
             }
@@ -412,8 +423,19 @@ fn diagnose_service(state: &SharedState, service: &str) -> axum::response::Respo
                     .into_iter()
                     .rev()
                     .collect();
+                let metric_type = store
+                    .get_metric_type(
+                        &series
+                            .labels
+                            .iter()
+                            .find(|(k, _)| *k == name_key.unwrap())
+                            .map(|(_, v)| *v)
+                            .unwrap_or_default(),
+                    )
+                    .map(|t| t.as_str().to_string());
                 metrics.push(json!({
                     "name": name,
+                    "type": metric_type,
                     "labels": label_map,
                     "sparkline": sparkline,
                 }));

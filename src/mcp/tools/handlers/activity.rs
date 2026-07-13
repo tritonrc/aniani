@@ -146,6 +146,7 @@ mod tests {
     use crate::mcp::tools::call;
     use crate::store::empty_test_state as tests_state;
     use serde_json::json;
+    use smallvec::SmallVec;
 
     #[test]
     fn reset_all_clears_and_returns_checkpoint() {
@@ -159,6 +160,10 @@ mod tests {
                     line: "x".into(),
                     ingest_seq: 0,
                     trace_id: None,
+                    span_id: None,
+                    severity_number: 0,
+                    severity_text: None,
+                    attributes: SmallVec::new(),
                 }],
             );
         }
@@ -210,6 +215,10 @@ mod tests {
                     line: "boom".into(),
                     ingest_seq: 0,
                     trace_id: None,
+                    span_id: None,
+                    severity_number: 0,
+                    severity_text: None,
+                    attributes: SmallVec::new(),
                 }],
             );
         }
@@ -258,6 +267,10 @@ mod tests {
                     line: "x".into(),
                     ingest_seq: 0,
                     trace_id: None,
+                    span_id: None,
+                    severity_number: 0,
+                    severity_text: None,
+                    attributes: SmallVec::new(),
                 }],
             );
         }
@@ -296,6 +309,10 @@ mod tests {
                     line: "x".into(),
                     ingest_seq: 0,
                     trace_id: None,
+                    span_id: None,
+                    severity_number: 0,
+                    severity_text: None,
+                    attributes: SmallVec::new(),
                 }],
             );
         }
@@ -355,6 +372,10 @@ mod tests {
                 line: format!("line {i}"),
                 ingest_seq: 0,
                 trace_id: None,
+                span_id: None,
+                severity_number: 0,
+                severity_text: None,
+                attributes: SmallVec::new(),
             })
             .collect();
         logs.ingest_stream(vec![("service".into(), "api".into())], entries);

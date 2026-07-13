@@ -46,15 +46,13 @@ fn test_promql_unsupported_aggregation_errors() {
         }],
     );
 
-    for query in &[r#"group(up)"#, r#"count_values("val", up)"#] {
-        let result = evaluate_instant(query, &store, 1000);
-        assert!(
-            result.is_err(),
-            "expected error for unsupported aggregation '{}', got: {:?}",
-            query,
-            result
-        );
-    }
+    // group is now supported; count_values is still unsupported.
+    let result = evaluate_instant(r#"count_values("val", up)"#, &store, 1000);
+    assert!(
+        result.is_err(),
+        "expected error for unsupported aggregation count_values, got: {:?}",
+        result
+    );
 }
 
 #[tokio::test]
@@ -436,9 +434,11 @@ fn test_trace_store_status_index() {
             start_time_ns: 1_000,
             duration_ns: 100,
             status: aniani::store::trace_store::SpanStatus::Ok,
+            status_message: None,
             kind: aniani::store::trace_store::SpanKind::Unspecified,
             attributes: smallvec::SmallVec::new(),
             events: Vec::new(),
+            links: Vec::new(),
             ingest_seq: 0,
         },
         aniani::store::trace_store::Span {
@@ -450,9 +450,11 @@ fn test_trace_store_status_index() {
             start_time_ns: 2_000,
             duration_ns: 100,
             status: aniani::store::trace_store::SpanStatus::Error,
+            status_message: None,
             kind: aniani::store::trace_store::SpanKind::Unspecified,
             attributes: smallvec::SmallVec::new(),
             events: Vec::new(),
+            links: Vec::new(),
             ingest_seq: 0,
         },
         aniani::store::trace_store::Span {
@@ -464,9 +466,11 @@ fn test_trace_store_status_index() {
             start_time_ns: 3_000,
             duration_ns: 100,
             status: aniani::store::trace_store::SpanStatus::Error,
+            status_message: None,
             kind: aniani::store::trace_store::SpanKind::Unspecified,
             attributes: smallvec::SmallVec::new(),
             events: Vec::new(),
+            links: Vec::new(),
             ingest_seq: 0,
         },
         aniani::store::trace_store::Span {
@@ -478,9 +482,11 @@ fn test_trace_store_status_index() {
             start_time_ns: 4_000,
             duration_ns: 100,
             status: aniani::store::trace_store::SpanStatus::Unset,
+            status_message: None,
             kind: aniani::store::trace_store::SpanKind::Unspecified,
             attributes: smallvec::SmallVec::new(),
             events: Vec::new(),
+            links: Vec::new(),
             ingest_seq: 0,
         },
     ]);

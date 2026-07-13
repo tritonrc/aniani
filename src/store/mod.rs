@@ -384,6 +384,10 @@ mod ingest_seq_restore_tests {
                 line: "x".into(),
                 ingest_seq: 41,
                 trace_id: None,
+                span_id: None,
+                severity_number: 0,
+                severity_text: None,
+                attributes: SmallVec::new(),
             }],
         );
         let metrics = MetricStore::new();
@@ -426,9 +430,11 @@ mod ingest_seq_restore_tests {
             start_time_ns: 1000,
             duration_ns: 100,
             status: SpanStatus::Ok,
+            status_message: None,
             kind: SpanKind::Unspecified,
             attributes: SmallVec::new(),
             events: Vec::new(),
+            links: Vec::new(),
             ingest_seq: 63,
         }]);
         assert_eq!(max_ingest_seq(&logs, &metrics, &traces), 63);

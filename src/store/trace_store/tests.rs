@@ -21,9 +21,11 @@ fn make_span(
         start_time_ns: start,
         duration_ns: duration,
         status,
+        status_message: None,
         kind: SpanKind::Unspecified,
         attributes: SmallVec::new(),
         events: Vec::new(),
+        links: Vec::new(),
         ingest_seq: 0,
     }
 }
@@ -383,9 +385,11 @@ fn test_clear_service_preserves_other_service_spans() {
             start_time_ns: 1000,
             duration_ns: 100,
             status: SpanStatus::Ok,
+            status_message: None,
             kind: SpanKind::Unspecified,
             attributes: SmallVec::new(),
             events: Vec::new(),
+            links: Vec::new(),
             ingest_seq: 0,
         },
         Span {
@@ -397,9 +401,11 @@ fn test_clear_service_preserves_other_service_spans() {
             start_time_ns: 1050,
             duration_ns: 50,
             status: SpanStatus::Ok,
+            status_message: None,
             kind: SpanKind::Unspecified,
             attributes: SmallVec::new(),
             events: Vec::new(),
+            links: Vec::new(),
             ingest_seq: 0,
         },
     ]);
@@ -442,9 +448,11 @@ fn test_evict_partial_cleans_stale_indexes() {
             start_time_ns: 100,
             duration_ns: 10,
             status: SpanStatus::Error,
+            status_message: None,
             kind: SpanKind::Unspecified,
             attributes: SmallVec::new(),
             events: Vec::new(),
+            links: Vec::new(),
             ingest_seq: 0,
         },
         Span {
@@ -456,9 +464,11 @@ fn test_evict_partial_cleans_stale_indexes() {
             start_time_ns: 1000,
             duration_ns: 10,
             status: SpanStatus::Ok,
+            status_message: None,
             kind: SpanKind::Unspecified,
             attributes: SmallVec::new(),
             events: Vec::new(),
+            links: Vec::new(),
             ingest_seq: 0,
         },
     ]);
@@ -481,4 +491,73 @@ fn test_evict_partial_cleans_stale_indexes() {
     );
     // New span should still be indexed
     assert!(store.name_index.contains_key(&new_name));
+}
+
+#[test]
+fn resolve_attribute_value_renders_array_bytes_kvlist() {
+    let mut store = TraceStore::new();
+    let s = store.interner.get_or_intern("green");
+    let k = store.interner.get_or_intern("host");
+
+    let array = AttributeValue::Array(vec![
+        AttributeValue::String(s),
+        AttributeValue::Int(7),
+        AttributeValue::Bool(true),
+    ]);
+    assert_eq!(store.resolve_attribute_value(&array), "[green, 7, true]");
+
+    let bytes = AttributeValue::Bytes(vec![0xde, 0xad, 0xbe, 0xef]);
+    assert_eq!(store.resolve_attribute_value(&bytes), "0xdeadbeef");
+
+    let kvlist = AttributeValue::KeyValueList(vec![
+        (k, AttributeValue::String(s)),
+        (
+            store.interner.get_or_intern("port"),
+            AttributeValue::Int(8080),
+        ),
+    ]);
+    assert_eq!(
+        store.resolve_attribute_value(&kvlist),
+        "{host=green, port=8080}"
+    );
+}
+
+#[test]
+fn attr_index_populated_and_reconciled_on_eviction() {
+    let mut store = TraceStore::new();
+    let tid1 = [1u8; 16];
+    let tid2 = [2u8; 16];
+    let svc = store.interner.get_or_intern("svc");
+    let op = store.interner.get_or_intern("op");
+    let key = store.interner.get_or_intern("span.code");
+    let v_a = store.interner.get_or_intern("a");
+    let v_b = store.interner.get_or_intern("b");
+    let mk = |tid, val| Span {
+        trace_id: tid,
+        span_id: [1u8; 8],
+        parent_span_id: None,
+        name: op,
+        service_name: svc,
+        start_time_ns: if tid == tid1 { 100 } else { 1000 },
+        duration_ns: 1,
+        status: SpanStatus::Ok,
+        status_message: None,
+        kind: SpanKind::Unspecified,
+        attributes: SmallVec::from_vec(vec![(key, AttributeValue::String(val))]),
+        events: Vec::new(),
+        links: Vec::new(),
+        ingest_seq: 0,
+    };
+    store.ingest_spans(vec![mk(tid1, v_a), mk(tid2, v_b)]);
+
+    // Both values indexed under the key.
+    let inner = store.attr_index.get(&key).expect("key indexed");
+    assert!(inner[&v_a].contains(&tid1));
+    assert!(inner[&v_b].contains(&tid2));
+
+    // Evict the older trace (tid1); attr_index must drop its entry.
+    store.evict_before(500);
+    let inner = store.attr_index.get(&key).expect("key still indexed");
+    assert!(!inner.contains_key(&v_a), "evicted value removed");
+    assert!(inner[&v_b].contains(&tid2));
 }

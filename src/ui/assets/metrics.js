@@ -27,7 +27,9 @@ export const Metrics = {
       </div>
       <div class="picker" v-if="chips.length">
         <span class="picker-label">Metrics:</span>
-        <button class="chip" v-for="c in chips" :key="c" @click="pick(c)">{{ c }}</button>
+        <button class="chip" v-for="c in chips" :key="c" @click="pick(c)">
+          {{ c }}<span class="chip-type" v-if="metricType(c)">{{ metricType(c) }}</span>
+        </button>
       </div>
       <p v-if="error" class="error">{{ error }}</p>
       <p v-if="loading" class="muted">Loading…</p>
@@ -71,6 +73,12 @@ export const Metrics = {
     onAi(q) { this.query = q; this.run() },
     async onService() { if (this.service) await window.__aniani.loadCatalog(this.service) },
     pick(c) { this.query = c; this.run() },
+    metricType(name) {
+      const t = (window.__aniani.vocab.metricMeta[name] || {}).type
+      if (!t || t === 'unknown') return ''
+      // Short badge: c=counter, g=gauge, h=histogram, s=summary
+      return ({ counter: 'c', gauge: 'g', histogram: 'h', summary: 's' })[t] || ''
+    },
     seriesLabel(metric) {
       return seriesLabelFor(metric)
     },

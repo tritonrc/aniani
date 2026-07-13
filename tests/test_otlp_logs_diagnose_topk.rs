@@ -184,7 +184,7 @@ async fn test_otlp_logs_ingest_and_logql_query() {
     let query = urlencoding::encode(r#"{service="auth-svc"}"#);
     let req = Request::builder()
         .method("GET")
-        .uri(format!("/loki/api/v1/query?query={}", query))
+        .uri(format!("/loki/api/v1/query?query={}&time={}", query, ts_ns))
         .body(Body::empty())
         .unwrap();
 

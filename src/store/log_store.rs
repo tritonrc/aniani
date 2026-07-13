@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 use super::posting_list::PostingList;
+use super::trace_store::AttributeValue;
 use super::{LabelMatcher, LabelPairs};
 
 /// A single log entry with nanosecond timestamp.
@@ -19,9 +20,26 @@ pub struct LogEntry {
     /// Global monotonic ingest sequence; assigned on store insert.
     #[serde(default)]
     pub ingest_seq: u64,
-    /// Lowercase hex trace id from OTLP logs; `None` for Loki-push entries.
+    /// W3C trace id (16 bytes, all-zero absent). Hex-encoded at the
+    /// presentation layer, not here.
     #[serde(default)]
-    pub trace_id: Option<String>,
+    pub trace_id: Option<[u8; 16]>,
+    /// W3C span id (8 bytes, all-zero absent). Hex-encoded at the
+    /// presentation layer.
+    #[serde(default)]
+    pub span_id: Option<[u8; 8]>,
+    /// OTLP severity number (0 when absent, e.g. Loki-push).
+    #[serde(default)]
+    pub severity_number: i32,
+    /// OTLP severity text (interned, e.g. "INFO", "ERROR"). `None` when
+    /// absent (Loki-push entries have no first-class severity text).
+    #[serde(default)]
+    pub severity_text: Option<Spur>,
+    /// Per-entry structured attributes (typed, interned). OTLP
+    /// `LogRecord.attributes` land here instead of being promoted to stream
+    /// labels, avoiding cardinality explosion from high-cardinality keys.
+    #[serde(default)]
+    pub attributes: SmallVec<[(Spur, AttributeValue); 8]>,
 }
 
 /// A log stream identified by a set of labels.
@@ -50,6 +68,11 @@ pub struct LogStore {
     /// Next stream ID for newly observed label sets.
     #[serde(default)]
     pub next_stream_id: u64,
+    /// Trace ID → set of stream IDs containing entries with that trace.
+    /// Enables efficient "all logs for trace X" lookups without scanning
+    /// every stream. Rebuilt on eviction.
+    #[serde(default)]
+    pub trace_index: FxHashMap<[u8; 16], FxHashSet<u64>>,
 }
 
 impl LogStore {
@@ -63,6 +86,7 @@ impl LogStore {
             total_entries: 0,
             stream_ids: FxHashMap::default(),
             next_stream_id: 0,
+            trace_index: FxHashMap::default(),
         }
     }
 
@@ -118,6 +142,12 @@ impl LogStore {
         };
         let entry_count = entries.len();
         let prev_len = stream.entries.len();
+        // Index trace_id → stream_id for efficient trace→log lookup.
+        for entry in &entries {
+            if let Some(tid) = entry.trace_id {
+                self.trace_index.entry(tid).or_default().insert(stream_id);
+            }
+        }
         stream.entries.extend(entries);
         self.total_entries += entry_count;
 
@@ -131,6 +161,26 @@ impl LogStore {
             && super::batch_needs_sort(&stream.entries, prev_len, |e| e.timestamp_ns);
         if needs_sort {
             stream.entries.sort_by_key(|e| e.timestamp_ns);
+        }
+    }
+
+    /// Get stream IDs that contain entries with the given trace ID.
+    pub fn streams_for_trace(&self, trace_id: &[u8; 16]) -> Vec<u64> {
+        self.trace_index
+            .get(trace_id)
+            .map(|set| set.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Rebuild the trace_id → stream index from surviving entries.
+    fn rebuild_trace_index(&mut self) {
+        self.trace_index.clear();
+        for (&stream_id, stream) in &self.streams {
+            for entry in &stream.entries {
+                if let Some(tid) = entry.trace_id {
+                    self.trace_index.entry(tid).or_default().insert(stream_id);
+                }
+            }
         }
     }
 
@@ -173,6 +223,45 @@ impl LogStore {
                 })
                 .collect()
         })
+    }
+
+    /// Resolve an `AttributeValue` to its display string using the interner.
+    pub fn resolve_attribute_value(&self, val: &AttributeValue) -> String {
+        match val {
+            AttributeValue::String(s) => self.interner.resolve(s).to_string(),
+            AttributeValue::Int(i) => i.to_string(),
+            AttributeValue::Float(f) => f.to_string(),
+            AttributeValue::Bool(b) => b.to_string(),
+            AttributeValue::Array(items) => {
+                let parts: Vec<String> = items
+                    .iter()
+                    .map(|v| self.resolve_attribute_value(v))
+                    .collect();
+                format!("[{}]", parts.join(", "))
+            }
+            AttributeValue::Bytes(b) => {
+                use std::fmt::Write;
+                let mut hex = String::with_capacity(b.len() * 2 + 2);
+                let _ = write!(hex, "0x");
+                for byte in b {
+                    let _ = write!(hex, "{byte:02x}");
+                }
+                hex
+            }
+            AttributeValue::KeyValueList(pairs) => {
+                let parts: Vec<String> = pairs
+                    .iter()
+                    .map(|(k, v)| {
+                        format!(
+                            "{}={}",
+                            self.interner.resolve(k),
+                            self.resolve_attribute_value(v)
+                        )
+                    })
+                    .collect();
+                format!("{{{}}}", parts.join(", "))
+            }
+        }
     }
 
     /// Get all label names.
@@ -227,6 +316,7 @@ impl LogStore {
                 );
             }
         }
+        self.rebuild_trace_index();
     }
 
     /// Evict oldest entries until total_entries <= max.
@@ -268,6 +358,7 @@ impl LogStore {
                 }
             }
         }
+        self.rebuild_trace_index();
     }
 
     /// Clear all data from the store.
@@ -279,6 +370,7 @@ impl LogStore {
         self.stream_ids.clear();
         self.next_stream_id = 0;
         self.total_entries = 0;
+        self.trace_index.clear();
     }
 
     /// Clear all data belonging to a specific service.
@@ -330,6 +422,8 @@ impl LogStore {
             // Actual string data in each entry (heap allocation beyond LogEntry struct)
             for entry in &stream.entries {
                 bytes += entry.line.capacity();
+                // Per-entry attributes: each (Spur, AttributeValue) pair
+                bytes += entry.attributes.len() * std::mem::size_of::<(Spur, AttributeValue)>();
             }
         }
 
