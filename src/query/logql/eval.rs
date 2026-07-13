@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 use crate::store::log_store::LogStore;
 use crate::store::{LabelMatchOp, LabelMatcher};
 
-use super::parser::{LogQLExpr, LogQLMatcher, MatchOp, MetricFunc, PipelineStage};
+use super::parser::{CompareOp, LogQLExpr, LogQLMatcher, MatchOp, MetricFunc, PipelineStage};
 
 /// Result of a LogQL evaluation.
 #[derive(Debug)]
@@ -506,6 +506,25 @@ fn apply_stages_with_extract(
             PipelineStage::Unwrap(_) => {
                 // No-op during filtering — the metric evaluator reads the
                 // field name and looks it up in the extracted map.
+            }
+            PipelineStage::CompareFilter { key, op, value } => {
+                let label_val = match extracted.get(key.as_str()) {
+                    Some(v) => v.as_str(),
+                    None => return None,
+                };
+                let num: f64 = match label_val.trim().parse() {
+                    Ok(n) => n,
+                    Err(_) => return None,
+                };
+                let passes = match op {
+                    CompareOp::Gt => num > *value,
+                    CompareOp::Gte => num >= *value,
+                    CompareOp::Lt => num < *value,
+                    CompareOp::Lte => num <= *value,
+                };
+                if !passes {
+                    return None;
+                }
             }
             PipelineStage::LabelFilter {
                 key,
