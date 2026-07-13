@@ -859,11 +859,12 @@ const Logs = {
           <button v-if="isClamped(r.line)" class="show-more-btn" @click="toggleExpand(i)">
             {{ expandedRows[i] ? 'show less' : 'show more' }}
           </button>
-          <div class="log-line2" v-if="r.labels.length || r.traceId">
-            <template v-for="(pair, j) in r.labels" :key="j">
+          <div class="log-line2" v-if="r.labels.length || r.traceId || r.attrs.length">
+            <template v-for="(pair, j) in r.labels" :key="'l' + j">
               <a v-if="pair[0] === 'service'" class="lbl-chip lbl-chip-link" :href="serviceLogsHref(pair[1])">[{{ pair[0] }}={{ pair[1] }}]</a>
               <span v-else class="lbl-chip">[{{ pair[0] }}={{ pair[1] }}]</span>
             </template>
+            <span v-for="(pair, j) in r.attrs" :key="'a' + j" class="lbl-chip attr-chip" :title="pair[1]">{{ pair[0] }}={{ clampAttr(pair[1]) }}</span>
             <a v-if="r.traceId" class="lbl-chip trace-chip" :href="traceHref(r.traceId)">trace ⧉</a>
           </div>
         </div>
@@ -928,12 +929,16 @@ const Logs = {
       this.run()
     },
     sevInfo(r) {
-      const entry = r.labels.find((pair) => pair[0] === 'level')
-      const lvl = entry ? String(entry[1]).toLowerCase() : ''
-      return LOG_SEVERITIES.includes(lvl) ? { cls: 'sev-' + lvl, text: lvl } : { cls: 'sev-none', text: '—' }
+      // Prefer severity_text from structured metadata, fall back to level label
+      const raw = r.severityText || r.labels.find((p) => p[0] === 'level')?.[1] || ''
+      const lvl = String(raw).toLowerCase()
+      return LOG_SEVERITIES.includes(lvl) ? { cls: 'sev-' + lvl, text: lvl } : { cls: 'sev-none', text: r.severityText || (lvl || '—') }
     },
     isClamped(line) {
       return line.length > 600 || line.split('\n').length > 6
+    },
+    clampAttr(val) {
+      return String(val).length > 48 ? String(val).slice(0, 48) + '…' : String(val)
     },
     isoTime(tsNs) {
       return new Date(tsNs / 1_000_000).toISOString()
@@ -983,6 +988,13 @@ const Logs = {
               labels,
               line: v[1],
               traceId: (v[2] && v[2].trace_id) || '',
+              spanId: (v[2] && v[2].span_id) || '',
+              severityText: (v[2] && v[2].severity_text) || '',
+              attrs: v[2]
+                ? Object.entries(v[2])
+                    .filter(([k]) => !['trace_id', 'span_id', 'severity_number', 'severity_text'].includes(k))
+                    .filter(([, val]) => val !== '')
+                : [],
             })
           }
         }
