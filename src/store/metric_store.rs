@@ -204,7 +204,8 @@ impl MetricStore {
     ) {
         let spur = self.interner.get_or_intern(normalized_name);
         let entry = self.metric_metadata.entry(spur).or_default();
-        if metric_type.is_some() {
+        // Don't let Unknown overwrite a concrete type (e.g. from OTLP).
+        if metric_type.is_some_and(|t| t != MetricType::Unknown) || entry.metric_type.is_none() {
             entry.metric_type = metric_type;
         }
         if help.is_some() {
@@ -227,6 +228,24 @@ impl MetricStore {
         self.interner
             .get(name)
             .and_then(|s| self.metric_metadata.get(&s))
+    }
+
+    /// Remove metric_metadata entries for names no longer referenced by any series.
+    fn prune_orphaned_metadata(&mut self) {
+        if let Some(name_key) = self.interner.get("__name__") {
+            let surviving: FxHashSet<Spur> = self
+                .series
+                .values()
+                .filter_map(|s| {
+                    s.labels
+                        .iter()
+                        .find(|(k, _)| *k == name_key)
+                        .map(|(_, v)| *v)
+                })
+                .collect();
+            self.metric_metadata
+                .retain(|normalized, _| surviving.contains(normalized));
+        }
     }
 
     /// Ingest samples for a metric with given name and labels.
@@ -389,6 +408,7 @@ impl MetricStore {
                 );
             }
         }
+        self.prune_orphaned_metadata();
     }
 
     /// Evict samples older than the given timestamp.
@@ -420,6 +440,7 @@ impl MetricStore {
                 );
             }
         }
+        self.prune_orphaned_metadata();
     }
 
     /// Clear all data from the store.

@@ -518,15 +518,15 @@ fn test_group_aggregation() {
 #[test]
 fn test_quantile_aggregation() {
     let store = make_store();
-    // quantile(0.5, ...) = median of [45, 90] = 45.0 (nearest-rank at ceil(0.5*2)=1)
+    // quantile(0.5, ...) = median of [45, 90] = 67.5 (linear interpolation)
     let result = evaluate_instant(r#"quantile(0.5, http_requests_total)"#, &store, 9000).unwrap();
     match result {
         PromQLResult::InstantVector(series) => {
             assert_eq!(series.len(), 1);
             let val = series[0].samples[0].1;
             assert!(
-                (val - 45.0).abs() < 0.1 || (val - 90.0).abs() < 0.1,
-                "quantile was {val}"
+                (val - 67.5).abs() < 0.1,
+                "quantile(0.5) should be 67.5, got {val}"
             );
         }
         _ => panic!("expected InstantVector"),
@@ -741,6 +741,134 @@ fn test_resets_function() {
     match result {
         PromQLResult::InstantVector(s) => {
             assert_eq!(s[0].samples[0].1, 2.0);
+        }
+        _ => panic!("expected InstantVector"),
+    }
+}
+
+#[test]
+fn test_and_set_operator() {
+    let mut store = MetricStore::new();
+    store.ingest_samples(
+        "m",
+        vec![
+            ("service".into(), "api".into()),
+            ("env".into(), "prod".into()),
+        ],
+        vec![Sample {
+            timestamp_ms: 1000,
+            value: 10.0,
+            ingest_seq: 0,
+        }],
+    );
+    store.ingest_samples(
+        "m",
+        vec![
+            ("service".into(), "api".into()),
+            ("env".into(), "staging".into()),
+        ],
+        vec![Sample {
+            timestamp_ms: 1000,
+            value: 20.0,
+            ingest_seq: 0,
+        }],
+    );
+    store.ingest_samples(
+        "m",
+        vec![
+            ("service".into(), "web".into()),
+            ("env".into(), "prod".into()),
+        ],
+        vec![Sample {
+            timestamp_ms: 1000,
+            value: 30.0,
+            ingest_seq: 0,
+        }],
+    );
+    let result = evaluate_instant(r#"m{env="prod"} and m{service="api"}"#, &store, 1000).unwrap();
+    match result {
+        PromQLResult::InstantVector(series) => {
+            assert_eq!(series.len(), 1, "and: should match 1 series");
+            assert_eq!(series[0].samples[0].1, 10.0, "and: should keep LHS value");
+        }
+        _ => panic!("expected InstantVector"),
+    }
+}
+
+#[test]
+fn test_or_set_operator() {
+    let mut store = MetricStore::new();
+    store.ingest_samples(
+        "a",
+        vec![("service".into(), "api".into())],
+        vec![Sample {
+            timestamp_ms: 1000,
+            value: 10.0,
+            ingest_seq: 0,
+        }],
+    );
+    store.ingest_samples(
+        "b",
+        vec![("service".into(), "web".into())],
+        vec![Sample {
+            timestamp_ms: 1000,
+            value: 20.0,
+            ingest_seq: 0,
+        }],
+    );
+    let result = evaluate_instant(r#"a or b"#, &store, 1000).unwrap();
+    match result {
+        PromQLResult::InstantVector(series) => {
+            assert_eq!(series.len(), 2, "or: should return 2 series (union)");
+        }
+        _ => panic!("expected InstantVector"),
+    }
+}
+
+#[test]
+fn test_unless_set_operator() {
+    let mut store = MetricStore::new();
+    store.ingest_samples(
+        "a",
+        vec![
+            ("service".into(), "api".into()),
+            ("env".into(), "prod".into()),
+        ],
+        vec![Sample {
+            timestamp_ms: 1000,
+            value: 10.0,
+            ingest_seq: 0,
+        }],
+    );
+    store.ingest_samples(
+        "a",
+        vec![
+            ("service".into(), "api".into()),
+            ("env".into(), "staging".into()),
+        ],
+        vec![Sample {
+            timestamp_ms: 1000,
+            value: 20.0,
+            ingest_seq: 0,
+        }],
+    );
+    store.ingest_samples(
+        "b",
+        vec![
+            ("service".into(), "api".into()),
+            ("env".into(), "staging".into()),
+        ],
+        vec![Sample {
+            timestamp_ms: 1000,
+            value: 30.0,
+            ingest_seq: 0,
+        }],
+    );
+    let result = evaluate_instant(r#"a unless on(service, env) b"#, &store, 1000).unwrap();
+    match result {
+        PromQLResult::InstantVector(series) => {
+            assert_eq!(series.len(), 1, "unless: should return 1 unmatched series");
+            assert_eq!(series[0].samples[0].1, 10.0);
         }
         _ => panic!("expected InstantVector"),
     }

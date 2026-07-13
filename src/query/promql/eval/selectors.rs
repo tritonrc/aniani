@@ -573,16 +573,14 @@ fn compute_over_time(func_name: &str, samples: &[Sample]) -> Option<f64> {
     })
 }
 
-/// Compute `quantile_over_time` using nearest-rank interpolation.
+/// Compute `quantile_over_time` using linear interpolation.
 fn quantile_over_time(quantile: f64, samples: &[Sample]) -> Option<f64> {
     if samples.is_empty() || !(0.0..=1.0).contains(&quantile) {
         return None;
     }
     let mut values: Vec<f64> = samples.iter().map(|s| s.value).collect();
     values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let n = values.len();
-    let rank = ((quantile * n as f64).ceil() as usize).clamp(1, n);
-    Some(values[rank - 1])
+    Some(super::functions::interpolate_quantile(&values, quantile))
 }
 
 /// Evaluate `changes()` or `resets()` over a range vector.
@@ -611,7 +609,7 @@ pub(super) fn eval_changes_or_resets(
             let labels = store.get_series_labels(*sid).unwrap_or_default();
             let samples =
                 store.get_samples(*sid, effective_end.saturating_sub(range_ms), effective_end);
-            if samples.len() >= 2 {
+            if !samples.is_empty() {
                 let count = count_changes_or_resets(func_name, samples);
                 results.push(SeriesResult {
                     labels,
@@ -628,7 +626,7 @@ pub(super) fn eval_changes_or_resets(
                 let effective_t = t.saturating_sub(offset_ms);
                 let samples =
                     store.get_samples(*sid, effective_t.saturating_sub(range_ms), effective_t);
-                if samples.len() >= 2 {
+                if !samples.is_empty() {
                     let count = count_changes_or_resets(func_name, samples);
                     series_samples.push((t, count));
                 }

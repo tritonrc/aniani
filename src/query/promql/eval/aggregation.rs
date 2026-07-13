@@ -209,7 +209,6 @@ fn eval_quantile_aggregation(
 
     PromQLResult::InstantVector(results)
 }
-
 fn quantile_group(series: &[SeriesResult], q: f64) -> Vec<(i64, f64)> {
     if series.is_empty() || !(0.0..=1.0).contains(&q) {
         return Vec::new();
@@ -235,10 +234,7 @@ fn quantile_group(series: &[SeriesResult], q: f64) -> Vec<(i64, f64)> {
                 return None;
             }
             values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            // Nearest-rank method: rank = ceil(q * n), clamped to [1, n]
-            let n = values.len();
-            let rank = ((q * n as f64).ceil() as usize).clamp(1, n);
-            Some((t, values[rank - 1]))
+            Some((t, super::functions::interpolate_quantile(&values, q)))
         })
         .collect()
 }

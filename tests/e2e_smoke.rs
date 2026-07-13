@@ -1508,7 +1508,14 @@ async fn test_e2e_smoke_all_features() {
         .json()
         .await
         .unwrap();
-    let obj = json.as_object().expect("metadata should be a JSON object");
+    assert_eq!(
+        json["status"], "success",
+        "metadata should have success status"
+    );
+    let data = &json["data"];
+    let obj = data
+        .as_object()
+        .expect("metadata data should be a JSON object");
     assert!(
         obj.contains_key("otlp_gauge_proto"),
         "metadata should include otlp_gauge_proto, got keys: {:?}",

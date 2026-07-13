@@ -14,8 +14,8 @@ use crate::store::metric_store::{MetricType, Sample};
 /// Infer the metric type from a Prometheus metric name using conventional suffixes.
 ///
 /// Prometheus doesn't carry type information in remote write. We use the standard
-/// naming conventions: `_bucket` / `_sum` / `_count` → histogram, `_total` / ends
-/// with `_count` (non-histogram) → counter. Everything else is treated as a gauge.
+/// naming conventions: `_bucket` / `_sum` / `_count` → histogram component,
+/// `_total` → counter. Everything else is classified as `Unknown`.
 fn infer_metric_type(name: &str) -> MetricType {
     if name.ends_with("_bucket") {
         MetricType::Histogram

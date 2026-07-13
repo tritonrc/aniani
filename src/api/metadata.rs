@@ -56,5 +56,8 @@ pub async fn metadata(State(state): State<SharedState>) -> Json<Value> {
         );
     }
 
-    Json(Value::Object(map))
+    Json(json!({
+        "status": "success",
+        "data": Value::Object(map),
+    }))
 }

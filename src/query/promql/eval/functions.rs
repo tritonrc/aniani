@@ -167,7 +167,9 @@ pub(super) fn apply_math_func(
             "exp" => v.exp(),
             "sqrt" => v.sqrt(),
             "sgn" => {
-                if v > 0.0 {
+                if v.is_nan() {
+                    f64::NAN
+                } else if v > 0.0 {
                     1.0
                 } else if v < 0.0 {
                     -1.0
@@ -378,4 +380,27 @@ pub(super) fn eval_label_join(
         .collect();
 
     Ok(PromQLResult::InstantVector(results))
+}
+
+/// Compute a quantile from a sorted slice of values using PromQL's
+/// linear-interpolation method (matching Prometheus `quantile`).
+///
+/// rank = q * (n - 1), interpolated between the two nearest values.
+pub(super) fn interpolate_quantile(sorted_values: &[f64], q: f64) -> f64 {
+    let n = sorted_values.len();
+    if n == 0 {
+        return f64::NAN;
+    }
+    if n == 1 {
+        return sorted_values[0];
+    }
+    let rank = q * (n - 1) as f64;
+    let lower = rank.floor() as usize;
+    let upper = rank.ceil() as usize;
+    if lower == upper {
+        sorted_values[lower]
+    } else {
+        let fraction = rank - lower as f64;
+        sorted_values[lower] * (1.0 - fraction) + sorted_values[upper] * fraction
+    }
 }

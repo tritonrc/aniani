@@ -97,7 +97,6 @@ pub(super) fn eval_binary_result(
     let match_mode = MatchMode::from_modifier(&mod_ref.matching);
     let join_mode = JoinMode::from_cardinality(&mod_ref.card);
     let return_bool = mod_ref.return_bool;
-    let is_cmp = is_comparison(&op);
 
     match (&lhs, &rhs) {
         (PromQLResult::Scalar(l), PromQLResult::Scalar(r)) => {
@@ -131,15 +130,18 @@ pub(super) fn eval_binary_result(
             Ok(PromQLResult::InstantVector(results))
         }
         (PromQLResult::InstantVector(lhs_series), PromQLResult::InstantVector(rhs_series)) => {
-            eval_vector_vector(
-                &op,
-                lhs_series,
-                rhs_series,
-                &match_mode,
-                &join_mode,
-                return_bool,
-                is_cmp,
-            )
+            if is_set_op(&op) {
+                eval_set_op(&op, lhs_series, rhs_series, &match_mode)
+            } else {
+                eval_vector_vector(
+                    &op,
+                    lhs_series,
+                    rhs_series,
+                    &match_mode,
+                    &join_mode,
+                    return_bool,
+                )
+            }
         }
         _ => Err(PromQLError::Unsupported(
             "unsupported binary operand types".into(),
@@ -155,7 +157,6 @@ fn eval_vector_vector(
     match_mode: &MatchMode,
     join_mode: &JoinMode,
     return_bool: bool,
-    is_cmp: bool,
 ) -> Result<PromQLResult, PromQLError> {
     // Index RHS by match key for lookup.
     // Each entry stores the series reference (for label carry in joins) and the sample map.
@@ -191,12 +192,7 @@ fn eval_vector_vector(
                         })
                         .collect();
                     if !samples.is_empty() {
-                        let labels = if is_cmp {
-                            match_mode.match_key(&ls.labels)
-                        } else {
-                            // For arithmetic ops, drop __name__ from result labels.
-                            labels_without_metric_name(&ls.labels)
-                        };
+                        let labels = labels_without_metric_name(&ls.labels);
                         results.push(SeriesResult { labels, samples });
                     }
                 }
@@ -254,12 +250,6 @@ fn eval_vector_vector(
                 let Some(rhs_matches) = rhs_by_key.get(&key) else {
                     continue;
                 };
-                if rhs_matches.len() > 1 {
-                    return Err(PromQLError::Eval(format!(
-                        "group_right: multiple LHS series match labels {:?}",
-                        key
-                    )));
-                }
                 let carry_set: std::collections::HashSet<&str> =
                     carry_labels.iter().map(String::as_str).collect();
                 for (rhs_sr, rhs_samples) in rhs_matches {
@@ -392,33 +382,86 @@ fn apply_binary_op(op: &str, l: f64, r: f64) -> f64 {
             }
         }
         "^" => l.powf(r),
-        "and" => {
-            if result_truthy(l) {
-                r
-            } else {
-                0.0
-            }
-        }
-        "or" => {
-            if result_truthy(l) {
-                l
-            } else {
-                r
-            }
-        }
-        "unless" => {
-            if result_truthy(l) {
-                0.0
-            } else {
-                r
-            }
-        }
         _ => f64::NAN,
     }
 }
 
-fn result_truthy(v: f64) -> bool {
-    !v.is_nan() && v != 0.0
+/// Evaluate vector set operations: `and`, `or`, `unless`.
+///
+/// These are series-level operations, not arithmetic:
+/// - `a and b`: LHS series that have a matching RHS series (LHS values preserved).
+/// - `a or b`: All LHS series, plus RHS series with no LHS match (union).
+/// - `a unless b`: LHS series with NO matching RHS series.
+fn eval_set_op(
+    op: &str,
+    lhs_series: &[SeriesResult],
+    rhs_series: &[SeriesResult],
+    match_mode: &MatchMode,
+) -> Result<PromQLResult, PromQLError> {
+    // Index RHS keys for O(1) lookup.
+    let rhs_keys: rustc_hash::FxHashSet<SeriesLabelSet> = rhs_series
+        .iter()
+        .map(|rs| match_mode.match_key(&rs.labels))
+        .collect();
+
+    let mut results = Vec::new();
+
+    match op {
+        "and" => {
+            for ls in lhs_series {
+                let key = match_mode.match_key(&ls.labels);
+                if rhs_keys.contains(&key) {
+                    results.push(SeriesResult {
+                        labels: labels_without_metric_name(&ls.labels),
+                        samples: ls.samples.clone(),
+                    });
+                }
+            }
+        }
+        "unless" => {
+            for ls in lhs_series {
+                let key = match_mode.match_key(&ls.labels);
+                if !rhs_keys.contains(&key) {
+                    results.push(SeriesResult {
+                        labels: labels_without_metric_name(&ls.labels),
+                        samples: ls.samples.clone(),
+                    });
+                }
+            }
+        }
+        "or" => {
+            // All LHS series first (preserving their values).
+            let mut lhs_keys: rustc_hash::FxHashSet<SeriesLabelSet> =
+                rustc_hash::FxHashSet::default();
+            for ls in lhs_series {
+                let key = match_mode.match_key(&ls.labels);
+                lhs_keys.insert(key);
+                results.push(SeriesResult {
+                    labels: labels_without_metric_name(&ls.labels),
+                    samples: ls.samples.clone(),
+                });
+            }
+            // RHS series that have no LHS match.
+            for rs in rhs_series {
+                let key = match_mode.match_key(&rs.labels);
+                if !lhs_keys.contains(&key) {
+                    results.push(SeriesResult {
+                        labels: labels_without_metric_name(&rs.labels),
+                        samples: rs.samples.clone(),
+                    });
+                }
+            }
+        }
+        _ => {
+            return Err(PromQLError::Unsupported(format!("set operator: {op}")));
+        }
+    }
+
+    Ok(PromQLResult::InstantVector(results))
+}
+
+fn is_set_op(op: &str) -> bool {
+    matches!(op, "and" | "or" | "unless")
 }
 
 fn is_comparison(op: &str) -> bool {
