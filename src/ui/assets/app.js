@@ -607,17 +607,27 @@ const TraceView = {
 }
 
 const vocab = reactive({
-  services: [],     // [{ name, signals: [] }]
-  metricNames: [],  // ["http_request_duration_ms", ...]
-  catalog: {},      // { [service]: { metrics: [], log_labels: [] } }
+  services: [],       // [{ name, signals: [] }]
+  metricNames: [],    // ["http_request_duration_ms", ...]
+  metricMeta: {},     // { "http_requests_total": { type: "counter", help: "...", unit: "..." } }
+  catalog: {},        // { [service]: { metrics: [], log_labels: [] } }
 })
 async function loadVocab() {
-  const [s, m] = await Promise.allSettled([
+  const [s, m, md] = await Promise.allSettled([
     apiGet('/api/v1/services'),
     apiGet('/api/v1/label/__name__/values'),
+    apiGet('/api/v1/metadata'),
   ])
   if (s.status === 'fulfilled') vocab.services = (s.value.data && s.value.data.services) || []
   if (m.status === 'fulfilled') vocab.metricNames = m.value.data || []
+  if (md.status === 'fulfilled' && md.value.data) {
+    const meta = md.value.data
+    for (const [name, entries] of Object.entries(meta)) {
+      if (Array.isArray(entries) && entries[0]) {
+        vocab.metricMeta[name] = entries[0]
+      }
+    }
+  }
 }
 async function loadCatalog(service) {
   if (!service) return null
@@ -1392,7 +1402,9 @@ const Metrics = {
       </div>
       <div class="picker" v-if="chips.length">
         <span class="picker-label">Metrics:</span>
-        <button class="chip" v-for="c in chips" :key="c" @click="pick(c)">{{ c }}</button>
+        <button class="chip" v-for="c in chips" :key="c" @click="pick(c)">
+          {{ c }}<span class="chip-type" v-if="metricType(c)">{{ metricType(c) }}</span>
+        </button>
       </div>
       <datalist id="metric-names">
         <option v-for="c in chips" :key="c" :value="c"></option>
@@ -1439,6 +1451,12 @@ const Metrics = {
     onAi(q) { this.query = q; this.run() },
     async onService() { if (this.service) await window.__aniani.loadCatalog(this.service) },
     pick(c) { this.query = c; this.run() },
+    metricType(name) {
+      const t = (window.__aniani.vocab.metricMeta[name] || {}).type
+      if (!t || t === 'unknown') return ''
+      // Short badge: c=counter, g=gauge, h=histogram, s=summary
+      return ({ counter: 'c', gauge: 'g', histogram: 'h', summary: 's' })[t] || ''
+    },
     seriesLabel(metric) {
       return seriesLabelFor(metric)
     },

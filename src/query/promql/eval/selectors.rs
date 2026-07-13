@@ -658,10 +658,9 @@ fn count_changes_or_resets(func_name: &str, samples: &[Sample]) -> f64 {
                     count += 1.0;
                 }
             }
-            "resets"
-                if samples[i].value < samples[i - 1].value => {
-                    count += 1.0;
-                }
+            "resets" if samples[i].value < samples[i - 1].value => {
+                count += 1.0;
+            }
             _ => {}
         }
     }

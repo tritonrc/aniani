@@ -46,15 +46,13 @@ fn test_promql_unsupported_aggregation_errors() {
         }],
     );
 
-    for query in &[r#"group(up)"#, r#"count_values("val", up)"#] {
-        let result = evaluate_instant(query, &store, 1000);
-        assert!(
-            result.is_err(),
-            "expected error for unsupported aggregation '{}', got: {:?}",
-            query,
-            result
-        );
-    }
+    // group is now supported; count_values is still unsupported.
+    let result = evaluate_instant(r#"count_values("val", up)"#, &store, 1000);
+    assert!(
+        result.is_err(),
+        "expected error for unsupported aggregation count_values, got: {:?}",
+        result
+    );
 }
 
 #[tokio::test]
