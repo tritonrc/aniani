@@ -17,7 +17,8 @@ use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
 use opentelemetry_proto::tonic::logs::v1::{LogRecord, ResourceLogs, ScopeLogs};
 use opentelemetry_proto::tonic::metrics::v1::{
-    Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics, metric, number_data_point,
+    AggregationTemporality, Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics, Sum,
+    metric, number_data_point,
 };
 use opentelemetry_proto::tonic::resource::v1::Resource;
 use opentelemetry_proto::tonic::trace::v1::span::Event;
@@ -629,12 +630,37 @@ async fn post_proto(client: &reqwest::Client, url: &str, body: Vec<u8>) -> anyho
     Ok(())
 }
 
-fn gauge_request(
+/// Emit one metric as a time series of samples. `monotonic` selects the OTLP
+/// type: a cumulative Sum (counter) when true, a Gauge otherwise. `points` are
+/// `(time_unix_nano, value)` pairs — several of them, so range queries and
+/// `rate()`/`increase()` (which need ≥2 samples in the window) have something
+/// to compute over instead of a single lonely point.
+fn timeseries_request(
     service: &str,
     metric_name: &str,
-    value: f64,
-    ts_ns: u64,
+    monotonic: bool,
+    points: &[(u64, f64)],
 ) -> ExportMetricsServiceRequest {
+    let data_points: Vec<NumberDataPoint> = points
+        .iter()
+        .map(|&(ts_ns, value)| NumberDataPoint {
+            attributes: vec![],
+            start_time_unix_nano: 0,
+            time_unix_nano: ts_ns,
+            exemplars: vec![],
+            flags: 0,
+            value: Some(number_data_point::Value::AsDouble(value)),
+        })
+        .collect();
+    let data = if monotonic {
+        metric::Data::Sum(Sum {
+            data_points,
+            aggregation_temporality: AggregationTemporality::Cumulative as i32,
+            is_monotonic: true,
+        })
+    } else {
+        metric::Data::Gauge(Gauge { data_points })
+    };
     ExportMetricsServiceRequest {
         resource_metrics: vec![ResourceMetrics {
             resource: Some(Resource {
@@ -649,16 +675,7 @@ fn gauge_request(
                     description: String::new(),
                     unit: String::new(),
                     metadata: vec![],
-                    data: Some(metric::Data::Gauge(Gauge {
-                        data_points: vec![NumberDataPoint {
-                            attributes: vec![],
-                            start_time_unix_nano: 0,
-                            time_unix_nano: ts_ns,
-                            exemplars: vec![],
-                            flags: 0,
-                            value: Some(number_data_point::Value::AsDouble(value)),
-                        }],
-                    })),
+                    data: Some(data),
                 }],
                 schema_url: String::new(),
             }],
@@ -719,21 +736,68 @@ async fn main() -> anyhow::Result<()> {
     post_proto(&client, &format!("{}/v1/traces", base), big.encode_to_vec()).await?;
     println!("  trace {:>18}  {} spans", "dashboard (wide)", big_spans);
 
-    // --- Metrics: a couple of gauges per service so the Metrics tab is live. ---
-    let metrics: &[(&str, &str, f64)] = &[
-        ("gateway", "http_request_duration_ms", 142.0),
-        ("payments", "http_request_duration_ms", 610.0),
-        ("inventory", "stock_level", 318.0),
-        ("db", "db_query_duration_ms", 95.0),
+    // --- Metrics: multi-sample series over the last five minutes so the
+    // Metrics tab plots real lines. Each series is sampled every 20s; values
+    // wobble deterministically (a cheap sine) around a per-service baseline so
+    // the chart varies without pulling in a rng dependency. ---
+    const STEP_NS: u64 = 20_000 * 1_000_000; // 20s
+    const N_POINTS: u64 = 15; // 15 * 20s ≈ 5 min of history
+    let sample_times: Vec<u64> = (0..N_POINTS)
+        .map(|i| now - STEP_NS * (N_POINTS - 1 - i))
+        .collect();
+
+    // Monotonic request counters — the point of this whole set: they make the
+    // default `rate(http_requests_total[5m])` query (the Metrics placeholder)
+    // return a real, varying line. `total` only ever increases; the per-step
+    // increment is what wobbles.
+    let counters: &[(&str, f64, f64)] = &[
+        // (service, requests per step, wobble amplitude)
+        ("gateway", 220.0, 70.0),
+        ("payments", 90.0, 35.0),
     ];
-    for (svc, name, val) in metrics {
-        let req = gauge_request(svc, name, *val, now);
+    let mut metric_series = 0;
+    for (svc, per_step, amp) in counters {
+        let mut total = 0.0;
+        let points: Vec<(u64, f64)> = sample_times
+            .iter()
+            .enumerate()
+            .map(|(i, &ts)| {
+                total += (per_step + amp * (i as f64 * 1.3).sin()).max(0.0);
+                (ts, total)
+            })
+            .collect();
+        let req = timeseries_request(svc, "http_requests_total", true, &points);
         post_proto(
             &client,
             &format!("{}/v1/metrics", base),
             req.encode_to_vec(),
         )
         .await?;
+        metric_series += 1;
+    }
+
+    // Gauges — same time window, so plotting the bare metric shows a line too.
+    let gauges: &[(&str, &str, f64, f64)] = &[
+        // (service, metric, baseline, wobble amplitude)
+        ("gateway", "http_request_duration_ms", 142.0, 40.0),
+        ("payments", "http_request_duration_ms", 610.0, 130.0),
+        ("inventory", "stock_level", 318.0, 14.0),
+        ("db", "db_query_duration_ms", 95.0, 28.0),
+    ];
+    for (svc, name, base_val, amp) in gauges {
+        let points: Vec<(u64, f64)> = sample_times
+            .iter()
+            .enumerate()
+            .map(|(i, &ts)| (ts, (base_val + amp * (i as f64 * 0.9).sin()).max(0.0)))
+            .collect();
+        let req = timeseries_request(svc, name, false, &points);
+        post_proto(
+            &client,
+            &format!("{}/v1/metrics", base),
+            req.encode_to_vec(),
+        )
+        .await?;
+        metric_series += 1;
     }
 
     // --- Logs: a few lines via the Loki push API, including one error. ---
@@ -785,10 +849,10 @@ async fn main() -> anyhow::Result<()> {
     .await?;
 
     println!(
-        "\nSeeded {} traces ({} spans), {} metrics, logs across 3 services.",
+        "\nSeeded {} traces ({} spans), {} metric series, logs across 3 services.",
         traces.len(),
         span_total,
-        metrics.len()
+        metric_series
     );
     println!(
         "Open the Traces tab at {}/ui and run a query (e.g. a service chip).",
