@@ -78,7 +78,7 @@ async fn query_inner(state: SharedState, params: QueryParams) -> (StatusCode, Js
                 );
             }
         },
-        None => (0, now_ns), // No time specified: search all data
+        None => (now_ns - 3_600_000_000_000, now_ns), // Default: last 1h
     };
 
     let limit = bounded_limit(params.limit);
