@@ -68,6 +68,11 @@ pub struct LogStore {
     /// Next stream ID for newly observed label sets.
     #[serde(default)]
     pub next_stream_id: u64,
+    /// Trace ID → set of stream IDs containing entries with that trace.
+    /// Enables efficient "all logs for trace X" lookups without scanning
+    /// every stream. Rebuilt on eviction.
+    #[serde(default)]
+    pub trace_index: FxHashMap<[u8; 16], FxHashSet<u64>>,
 }
 
 impl LogStore {
@@ -81,6 +86,7 @@ impl LogStore {
             total_entries: 0,
             stream_ids: FxHashMap::default(),
             next_stream_id: 0,
+            trace_index: FxHashMap::default(),
         }
     }
 
@@ -136,6 +142,12 @@ impl LogStore {
         };
         let entry_count = entries.len();
         let prev_len = stream.entries.len();
+        // Index trace_id → stream_id for efficient trace→log lookup.
+        for entry in &entries {
+            if let Some(tid) = entry.trace_id {
+                self.trace_index.entry(tid).or_default().insert(stream_id);
+            }
+        }
         stream.entries.extend(entries);
         self.total_entries += entry_count;
 
@@ -149,6 +161,26 @@ impl LogStore {
             && super::batch_needs_sort(&stream.entries, prev_len, |e| e.timestamp_ns);
         if needs_sort {
             stream.entries.sort_by_key(|e| e.timestamp_ns);
+        }
+    }
+
+    /// Get stream IDs that contain entries with the given trace ID.
+    pub fn streams_for_trace(&self, trace_id: &[u8; 16]) -> Vec<u64> {
+        self.trace_index
+            .get(trace_id)
+            .map(|set| set.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Rebuild the trace_id → stream index from surviving entries.
+    fn rebuild_trace_index(&mut self) {
+        self.trace_index.clear();
+        for (&stream_id, stream) in &self.streams {
+            for entry in &stream.entries {
+                if let Some(tid) = entry.trace_id {
+                    self.trace_index.entry(tid).or_default().insert(stream_id);
+                }
+            }
         }
     }
 
@@ -284,6 +316,7 @@ impl LogStore {
                 );
             }
         }
+        self.rebuild_trace_index();
     }
 
     /// Evict oldest entries until total_entries <= max.
@@ -325,6 +358,7 @@ impl LogStore {
                 }
             }
         }
+        self.rebuild_trace_index();
     }
 
     /// Clear all data from the store.
@@ -336,6 +370,7 @@ impl LogStore {
         self.stream_ids.clear();
         self.next_stream_id = 0;
         self.total_entries = 0;
+        self.trace_index.clear();
     }
 
     /// Clear all data belonging to a specific service.
