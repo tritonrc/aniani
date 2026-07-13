@@ -34,4 +34,3 @@ pub struct SeriesResult {
 
 pub(super) type SeriesLabelSet = Vec<(String, String)>;
 pub(super) type SampleLookup = FxHashMap<i64, f64>;
-pub(super) type SeriesLookup = FxHashMap<SeriesLabelSet, Vec<SampleLookup>>;

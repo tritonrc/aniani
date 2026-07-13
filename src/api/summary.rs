@@ -153,12 +153,20 @@ fn summarize_metrics(state: &SharedState, service: &str) -> Vec<serde_json::Valu
         };
         let metric_name = store.interner.resolve(name_value).to_string();
         let lower_name = metric_name.to_ascii_lowercase();
-        if !lower_name.contains("error") && !lower_name.contains("fail") {
+        let is_notable = lower_name.contains("error")
+            || lower_name.contains("fail")
+            || lower_name.contains("duration")
+            || lower_name.contains("latency");
+        if !is_notable {
             continue;
         }
         let Some(sample) = series.samples.last() else {
             continue;
         };
+
+        let metric_type = store
+            .get_metric_type(name_value)
+            .map(|t| t.as_str().to_string());
 
         let labels = series
             .labels
@@ -174,6 +182,7 @@ fn summarize_metrics(state: &SharedState, service: &str) -> Vec<serde_json::Valu
 
         metrics.push(json!({
             "name": metric_name,
+            "type": metric_type,
             "timestampMs": sample.timestamp_ms.to_string(),
             "value": sample.value,
             "labels": labels,

@@ -6,9 +6,19 @@ use crate::store::{LabelMatchOp, LabelMatcher, SharedState};
 #[derive(Debug, Serialize)]
 pub struct ServiceCatalog {
     pub service: String,
-    pub metrics: Vec<String>,
+    pub metrics: Vec<MetricInfo>,
     pub log_labels: Vec<LabelInfo>,
     pub span_attributes: Vec<String>,
+}
+#[derive(Debug, Serialize)]
+pub struct MetricInfo {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metric_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub help: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
 }
 #[derive(Debug, Serialize)]
 pub struct LabelInfo {
@@ -30,7 +40,7 @@ pub fn describe_service(state: &SharedState, service: &str) -> ServiceCatalog {
             value: service.to_string(),
         }];
         let name_key = store.interner.get("__name__");
-        let mut names: Vec<String> = Vec::new();
+        let mut names: Vec<MetricInfo> = Vec::new();
         let mut seen = FxHashSet::default();
         for sid in store.select_series(&matchers) {
             if let Some(series) = store.series.get(&sid)
@@ -39,11 +49,19 @@ pub fn describe_service(state: &SharedState, service: &str) -> ServiceCatalog {
             {
                 let n = store.interner.resolve(v).to_string();
                 if seen.insert(n.clone()) {
-                    names.push(n);
+                    let md = store.metric_metadata.get(v);
+                    names.push(MetricInfo {
+                        metric_type: md
+                            .and_then(|m| m.metric_type)
+                            .map(|t| t.as_str().to_string()),
+                        help: md.and_then(|m| m.help.clone()),
+                        unit: md.and_then(|m| m.unit.clone()),
+                        name: n,
+                    });
                 }
             }
         }
-        names.sort();
+        names.sort_by(|a, b| a.name.cmp(&b.name));
         names
     };
 
@@ -140,5 +158,39 @@ mod tests {
         assert!(cat.log_labels.iter().any(|l| l.key == "level"));
         let level = cat.log_labels.iter().find(|l| l.key == "level").unwrap();
         assert!(level.values.contains(&"error".to_string()));
+    }
+
+    #[test]
+    fn describe_service_reports_metric_types() {
+        use crate::store::metric_store::Sample;
+
+        let st = state();
+        {
+            let mut m = st.metric_store.write();
+            m.ingest_samples(
+                "http_requests_total",
+                vec![("service".into(), "api".into())],
+                vec![Sample {
+                    timestamp_ms: 1,
+                    value: 5.0,
+                    ingest_seq: 0,
+                }],
+            );
+            m.register_metric_metadata(
+                "http_requests_total",
+                Some(crate::store::metric_store::MetricType::Counter),
+                Some("Total HTTP requests"),
+                Some("requests"),
+            );
+        }
+        let cat = describe_service(&st, "api");
+        let metric = cat
+            .metrics
+            .iter()
+            .find(|m| m.name == "http_requests_total")
+            .expect("metric should be present");
+        assert_eq!(metric.metric_type.as_deref(), Some("counter"));
+        assert_eq!(metric.help.as_deref(), Some("Total HTTP requests"));
+        assert_eq!(metric.unit.as_deref(), Some("requests"));
     }
 }

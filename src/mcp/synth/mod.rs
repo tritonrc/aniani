@@ -9,7 +9,7 @@ pub use activity::{
     LogItem, LogsBlock, MetricItem, MetricsBlock, ServiceActivity, TraceItem, TracesBlock,
     Truncated, summarize_activity,
 };
-pub use catalog::{LabelInfo, ServiceCatalog, describe_service};
+pub use catalog::{LabelInfo, MetricInfo, ServiceCatalog, describe_service};
 pub use health::{HealthOverview, ServiceHealth, check_health};
 pub use trace::{SpanNode, TraceTree, build_trace_tree, trace_item, trace_items};
 

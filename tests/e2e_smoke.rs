@@ -1499,7 +1499,7 @@ async fn test_e2e_smoke_all_features() {
         "openapi should have /api/v1/reset"
     );
 
-    // --- GET /api/v1/metadata — assert exact empty object ---
+    // --- GET /api/v1/metadata — returns per-metric type/help/unit ---
     let json: Value = client
         .get(format!("{}/api/v1/metadata", base))
         .send()
@@ -1509,9 +1509,22 @@ async fn test_e2e_smoke_all_features() {
         .await
         .unwrap();
     assert_eq!(
-        json,
-        json!({}),
-        "metadata should return exact empty JSON object"
+        json["status"], "success",
+        "metadata should have success status"
+    );
+    let data = &json["data"];
+    let obj = data
+        .as_object()
+        .expect("metadata data should be a JSON object");
+    assert!(
+        obj.contains_key("otlp_gauge_proto"),
+        "metadata should include otlp_gauge_proto, got keys: {:?}",
+        obj.keys().collect::<Vec<_>>()
+    );
+    let entry = &obj["otlp_gauge_proto"][0];
+    assert_eq!(
+        entry["type"], "gauge",
+        "otlp_gauge_proto should be type gauge"
     );
 
     // --- GET /ready ---

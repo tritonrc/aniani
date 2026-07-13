@@ -423,8 +423,19 @@ fn diagnose_service(state: &SharedState, service: &str) -> axum::response::Respo
                     .into_iter()
                     .rev()
                     .collect();
+                let metric_type = store
+                    .get_metric_type(
+                        &series
+                            .labels
+                            .iter()
+                            .find(|(k, _)| *k == name_key.unwrap())
+                            .map(|(_, v)| *v)
+                            .unwrap_or_default(),
+                    )
+                    .map(|t| t.as_str().to_string());
                 metrics.push(json!({
                     "name": name,
+                    "type": metric_type,
                     "labels": label_map,
                     "sparkline": sparkline,
                 }));

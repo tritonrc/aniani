@@ -193,7 +193,11 @@ pub fn summarize_activity(
                 });
                 let Some(mname) = mname else { continue };
                 let lower = mname.to_ascii_lowercase();
-                if !lower.contains("error") && !lower.contains("fail") {
+                let is_notable = lower.contains("error")
+                    || lower.contains("fail")
+                    || lower.contains("duration")
+                    || lower.contains("latency");
+                if !is_notable {
                     continue;
                 }
                 if let Some(sample) = series.samples.iter().rev().find(|s| keep(s.ingest_seq)) {
