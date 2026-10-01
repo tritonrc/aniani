@@ -121,11 +121,9 @@ export function escLabel(v) {
   return String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 }
 
-// Stable per-trace service color palette (assigned by sorted service order).
-export const SERVICE_COLORS = [
-  '#4ea1ff', '#ff9f43', '#26de81', '#fc5c65', '#a55eea',
-  '#fed330', '#2bcbba', '#fd9644', '#778ca3', '#eb3b5a',
-]
+// Stable per-trace service color palette. Owned by the (portable) trace view
+// model and re-exported here for charts.js, which predates the split.
+export { SERVICE_COLORS } from './trace-model.js'
 
 export const vocab = reactive({
   services: [],       // [{ name, signals: [] }]

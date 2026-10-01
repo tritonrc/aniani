@@ -1,7 +1,7 @@
-import { agoLabel, apiGet, escLabel, rangeParam, rangeStartMs, routeAware, setParams, vocab } from './core.js'
+import { agoLabel, apiGet, escLabel, href, rangeParam, rangeStartMs, routeAware, setParams, sigEmoji, signalLinks, vocab } from './core.js'
 import { QueryBar } from './querybar.js'
 import { AiAsk } from './ai-ask.js'
-import { TraceView } from './trace.js'
+import { TraceView } from './trace/index.js'
 
 export const Traces = {
   components: { AiAsk, TraceView, QueryBar },
@@ -73,7 +73,9 @@ export const Traces = {
             <h3 class="mono">Trace {{ selectedId }}</h3>
             <p v-if="detailError" class="error">{{ detailError }}</p>
             <p v-else-if="!selected" class="muted">Loading…</p>
-            <trace-view v-else :key="selectedId" :detail="selected" :trace-id="selectedId"></trace-view>
+            <trace-view v-else :key="selectedId" :detail="selected" :trace-id="selectedId"
+              :build-logs-href="buildLogsHref" :build-trace-href="buildTraceHref" :service-links="serviceSignalLinks"
+            ></trace-view>
           </div>
           <p v-else class="muted">Select a trace on the left to view its timeline.</p>
         </div>
@@ -153,6 +155,24 @@ export const Traces = {
     pick(c) { this.query = c; this.run() },
     shortId(id) {
       return id && id.length > 16 ? id.slice(0, 8) + '…' + id.slice(-4) : id
+    },
+    // --- TraceView pivot builders: aniani-specific links the portable viewer
+    // --- receives as props (it renders them only when provided).
+    // href('logs', ...) for the span's service, windowed 30s before/after the
+    // span so the correlated log lines are in view without an extra search.
+    // startBig/endBig are BigInt; do the arithmetic in BigInt then String() it.
+    buildLogsHref(span) {
+      const start = span.startBig - 30_000_000_000n
+      const end = span.endBig + 30_000_000_000n
+      return href('logs', { q: '{service="' + escLabel(span.service) + '"}', start: String(start), end: String(end) })
+    },
+    // Hash link to open a different trace (used by span-link pivots).
+    buildTraceHref(traceId) {
+      return href('traces', { trace: traceId })
+    },
+    // Cross-signal pivots for a span's service, each with its emoji glyph.
+    serviceSignalLinks(service) {
+      return signalLinks(service).map((l) => ({ ...l, icon: sigEmoji(l.label) }))
     },
     async run() {
       this.error = ''
