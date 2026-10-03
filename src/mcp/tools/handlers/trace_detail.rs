@@ -15,7 +15,7 @@ pub(in crate::mcp::tools) fn handle_get_trace(
         return tool_err(id, "trace_id must be exactly 32 hex characters".into());
     }
     let mut bytes = [0u8; 16];
-    for (i, chunk) in hex.as_bytes().chunks_exact(2).enumerate() {
+    for (i, chunk) in hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let pair = std::str::from_utf8(chunk).unwrap_or("");
         match u8::from_str_radix(pair, 16) {
             Ok(b) => bytes[i] = b,
