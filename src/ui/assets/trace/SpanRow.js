@@ -1,8 +1,10 @@
 import { formatDuration } from '../trace-model.js'
 
 // One waterfall row: service-colored name column (tree indent + collapse
-// caret) and a time track with the span bar and duration label. Pure
-// presentational — collapse/open state and toggling live in TraceView.
+// caret) and a time track with the span bar and duration label. Collapse/open
+// state and toggling live in TraceView. The row itself is not interactive;
+// detail and subtree toggles are separate named buttons (native keyboard
+// activation, no nested interactive controls).
 export const SpanRow = {
   name: 'SpanRow',
   props: {
@@ -34,15 +36,29 @@ export const SpanRow = {
     <div
       class="tl-row"
       :class="{ open: open, error: row.span.statusCode === 2 }"
-      @click="$emit('toggle-detail', row.span.uid)"
     >
       <div class="tl-name-col" :style="{ paddingLeft: (row.depth * 14 + 4) + 'px' }">
-        <span class="tl-toggle" v-if="row.hasChildren" @click.stop="$emit('toggle-collapse', row.span.uid)">{{ collapsed ? '▸' : '▾' }}</span>
+        <button
+          v-if="row.hasChildren"
+          type="button"
+          class="tl-toggle"
+          :aria-expanded="!collapsed"
+          :aria-label="(collapsed ? 'Expand subtree of ' : 'Collapse subtree of ') + row.span.name"
+          @click="$emit('toggle-collapse', row.span.uid)"
+        >{{ collapsed ? '▸' : '▾' }}</button>
         <span class="tl-toggle ghost" v-else></span>
         <span class="tl-svc-bar" :style="{ background: row.color }"></span>
-        <span class="tl-span-name" :title="row.span.name">{{ row.span.name }}</span>
-        <span class="tl-svc-tag">{{ row.span.service }}</span>
-        <span class="tl-err-dot" v-if="row.span.statusCode === 2" title="error">●</span>
+        <button
+          type="button"
+          class="tl-row-main"
+          :aria-expanded="open"
+          :aria-label="'Span details for ' + row.span.service + ' ' + row.span.name"
+          @click="$emit('toggle-detail', row.span.uid)"
+        >
+          <span class="tl-span-name" :title="row.span.name">{{ row.span.name }}</span>
+          <span class="tl-svc-tag">{{ row.span.service }}</span>
+          <span class="tl-err-dot" v-if="row.span.statusCode === 2" title="error">●</span>
+        </button>
       </div>
       <div class="tl-track">
         <div class="tl-bar" :style="{ left: row.leftPct + '%', width: row.widthPct + '%', background: row.color }"></div>

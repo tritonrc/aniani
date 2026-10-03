@@ -56,10 +56,12 @@ function serviceFromResource(resource) {
   return (a && a.value && a.value.stringValue) || 'unknown'
 }
 
-// Map OTLP attributes into flat {key, value, title} rows. Long values —
+// Map OTLP attributes into flat {key, value, title, full} rows. Long values —
 // common for the structured types (arrays, byte strings, key-value lists)
 // — are truncated for table density with the full text carried in `title`
-// for hover. `title` is empty for short values so the cell renders cleanly.
+// for hover and in `full` for lookups (exception messages/stacktraces must
+// never lose diagnostic text). `title` is empty for short values so the cell
+// renders cleanly.
 const ATTR_VALUE_MAX = 96
 function mapAttrs(list) {
   return (list || []).map((a) => {
@@ -69,6 +71,7 @@ function mapAttrs(list) {
       key: a.key,
       value: tooLong ? raw.slice(0, ATTR_VALUE_MAX) + '…' : raw,
       title: tooLong ? raw : '',
+      full: raw,
     }
   })
 }
@@ -111,7 +114,9 @@ export function isException(ev) {
 
 export function attrVal(ev, key) {
   const a = ev.attributes.find((x) => x.key === key)
-  return a ? a.value : ''
+  // `full` carries the untruncated text — exception messages and stacktraces
+  // must render completely even past the 96-char table abbreviation.
+  return a ? a.full : ''
 }
 
 // Parse the /api/traces/{id} payload into a render model: flat spans with
