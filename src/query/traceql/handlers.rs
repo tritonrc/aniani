@@ -510,3 +510,6 @@ mod tests {
         assert_eq!(id[15], 0xff);
     }
 }
+
+#[cfg(test)]
+mod search_order_tests;
