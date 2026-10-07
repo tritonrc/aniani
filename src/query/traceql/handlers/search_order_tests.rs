@@ -9,8 +9,7 @@ use super::{SearchParams, search};
 use crate::store::trace_store::{AttributeValue, Span, SpanKind, SpanStatus};
 use crate::store::{SharedState, empty_test_state};
 
-#[allow(dead_code)]
-pub(super) enum Attr<'a> {
+enum Attr<'a> {
     Str(&'a str),
     Int(i64),
     Bool(bool),
@@ -18,7 +17,7 @@ pub(super) enum Attr<'a> {
 
 /// One single-span trace in namespace `ns`. The trace id is `[trace; 16]`, so
 /// trace-id order is numeric order of `trace`.
-pub(super) fn ingest(
+fn ingest(
     state: &SharedState,
     trace: u8,
     start_ns: i64,
@@ -63,11 +62,7 @@ pub(super) fn ingest(
     }]);
 }
 
-pub(super) async fn search_ids(
-    state: SharedState,
-    q: Option<&str>,
-    limit: Option<usize>,
-) -> Vec<String> {
+async fn search_ids(state: SharedState, q: Option<&str>, limit: Option<usize>) -> Vec<String> {
     let params = SearchParams {
         q: q.map(str::to_owned),
         start: None,
@@ -86,7 +81,7 @@ pub(super) async fn search_ids(
         .collect()
 }
 
-pub(super) fn id(trace: u8) -> String {
+fn id(trace: u8) -> String {
     format!("{trace:02x}").repeat(16)
 }
 
@@ -126,4 +121,134 @@ async fn recent_traces_without_a_query_stay_newest_first() {
     ingest(&state, 3, 3_000, "op", "svc", &[]);
 
     assert_eq!(search_ids(state, None, Some(2)).await, vec![id(3), id(2)]);
+}
+
+#[tokio::test]
+async fn escaped_string_literals_match_verbatim_values() {
+    let state = empty_test_state();
+    ingest(&state, 1, 1_000, "op", r#"a"b\c || x"#, &[]);
+    ingest(&state, 2, 2_000, "op", "a", &[]);
+
+    let q = r#"{resource.service.namespace="ns" && resource.service.name="a\"b\\c || x"}"#;
+    assert_eq!(search_ids(state, Some(q), None).await, vec![id(1)]);
+}
+
+#[tokio::test]
+async fn span_scoped_keyword_keys_match_attributes_not_intrinsics() {
+    let state = empty_test_state();
+    ingest(
+        &state,
+        1,
+        1_000,
+        "other",
+        "svc",
+        &[("span.name", Attr::Str("checkout"))],
+    );
+    ingest(&state, 2, 2_000, "checkout", "svc", &[]);
+    ingest(
+        &state,
+        3,
+        3_000,
+        "op",
+        "svc",
+        &[("span.status", Attr::Str("error"))],
+    );
+
+    let by_name = r#"{resource.service.namespace="ns" && span.name="checkout"}"#;
+    assert_eq!(
+        search_ids(state.clone(), Some(by_name), None).await,
+        vec![id(1)]
+    );
+    let by_status = r#"{resource.service.namespace="ns" && span.status="error"}"#;
+    assert_eq!(search_ids(state, Some(by_status), None).await, vec![id(3)]);
+}
+
+#[tokio::test]
+async fn unquoted_integers_match_integer_and_numeric_string_attributes() {
+    let state = empty_test_state();
+    ingest(
+        &state,
+        1,
+        1_000,
+        "op",
+        "svc",
+        &[("span.http.status_code", Attr::Int(500))],
+    );
+    ingest(
+        &state,
+        2,
+        2_000,
+        "op",
+        "svc",
+        &[("span.http.status_code", Attr::Str("500"))],
+    );
+    ingest(
+        &state,
+        3,
+        3_000,
+        "op",
+        "svc",
+        &[("span.http.status_code", Attr::Int(200))],
+    );
+
+    let q = r#"{resource.service.namespace="ns" && span.http.status_code=500}"#;
+    assert_eq!(search_ids(state, Some(q), None).await, vec![id(2), id(1)]);
+}
+
+#[tokio::test]
+async fn booleans_are_unquoted_for_span_keys_and_quoted_for_resource_keys() {
+    let state = empty_test_state();
+    ingest(
+        &state,
+        1,
+        1_000,
+        "op",
+        "svc",
+        &[("span.flag", Attr::Bool(true))],
+    );
+    ingest(
+        &state,
+        2,
+        2_000,
+        "op",
+        "svc",
+        &[("resource.feature.enabled", Attr::Str("true"))],
+    );
+
+    let span_q = r#"{resource.service.namespace="ns" && span.flag=true}"#;
+    assert_eq!(
+        search_ids(state.clone(), Some(span_q), None).await,
+        vec![id(1)]
+    );
+    let resource_q = r#"{resource.service.namespace="ns" && resource.feature.enabled="true"}"#;
+    assert_eq!(search_ids(state, Some(resource_q), None).await, vec![id(2)]);
+}
+
+#[tokio::test]
+async fn long_digit_runs_are_searched_as_strings() {
+    let state = empty_test_state();
+    ingest(
+        &state,
+        1,
+        1_000,
+        "op",
+        "svc",
+        &[("span.n", Attr::Str("99999999999999999999"))],
+    );
+
+    let q = r#"{resource.service.namespace="ns" && span.n="99999999999999999999"}"#;
+    assert_eq!(search_ids(state, Some(q), None).await, vec![id(1)]);
+}
+
+#[tokio::test]
+async fn operation_and_min_duration_conditions_hold_on_one_span() {
+    let state = empty_test_state();
+    // Each span lasts 300ms (see `ingest`).
+    ingest(&state, 1, 1_000, r#"GET "x""#, "svc", &[]);
+    ingest(&state, 2, 2_000, "other", "svc", &[]);
+
+    let q = r#"{resource.service.namespace="ns" && name="GET \"x\"" && duration>=250ms}"#;
+    assert_eq!(search_ids(state.clone(), Some(q), None).await, vec![id(1)]);
+    let too_long = r#"{resource.service.namespace="ns" && name="GET \"x\"" && duration>=1s}"#;
+    assert!(search_ids(state, Some(too_long), None).await.is_empty());
 }
