@@ -123,6 +123,15 @@ pub async fn search(
         })
         .collect();
 
+    // Newest trace first, so a limited search keeps the most recent traces.
+    results.sort_by_cached_key(|r| {
+        let start = store
+            .trace_result(&r.trace_id)
+            .map(|t| t.start_time_ns)
+            .or_else(|| r.matched_spans.first().map(|s| s.start_time_ns))
+            .unwrap_or(0);
+        (std::cmp::Reverse(start), r.trace_id)
+    });
     results.truncate(bounded_limit(params.limit, MAX_TRACE_SEARCH_LIMIT));
 
     let traces: Vec<Value> = results
